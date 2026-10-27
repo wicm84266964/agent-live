@@ -246,9 +246,7 @@ export class Renderer {
      * 再取整到整数倍缩放。
      */
     const targetScale = (Math.min(cssW, cssH) * 0.88) / (ARENA.r * 2 + 80);
-    this.scale = Math.max(1, Math.floor(targetScale * 10) / 10);
-    // 再保守一点：低于 1 就钳到 1
-    if (this.scale < 1) this.scale = 1;
+    this.scale = Math.max(0.35, Math.min(2, targetScale));
 
     const pxW = Math.round(cssW * dpr);
     const pxH = Math.round(cssH * dpr);
@@ -274,6 +272,8 @@ export class Renderer {
 
     const ctx = this.ctx;
     const { now } = s;
+    this.flight = s.flight || null;
+    this._fx = s.fx || null;
     this._t = now / 1000;
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -299,18 +299,13 @@ export class Renderer {
     ctx.setTransform(vt.a, 0, 0, vt.d, vt.e, vt.f);
 
     if (sh.a) {
-      /*
-       * 绕画面中心旋转，所以先把原点挪到画布中心再转，最后挪回去。
-       * 直接 setTransform 带旋转的话，旋转会绕世界原点 —— 那是画布
-       * 左上角，整个场景会甩出屏幕。
-       */
-      ctx.translate(this.vw / 2, this.vh / 2);
+      // viewportTransform already places the world origin at the canvas center.
       ctx.rotate(sh.a);
-      ctx.translate(-this.vw / 2, -this.vh / 2);
     }
 
     /* ---- 地面 ---- */
     this._drawGround(ctx);
+    if (this.flight) this._drawFlightTraffic(ctx);
 
     /* ---- 血迹（在地上，敌人下面） ---- */
     this._drawStains(ctx);
@@ -324,7 +319,8 @@ export class Renderer {
     for (const e of list) this._drawEnemy(ctx, e, now);
 
     /* ---- 植保盾牌 ---- */
-    this._drawAegis(ctx, s.aegis, now);
+    if (this.flight) this._drawFlightHero(ctx, s.aegis);
+    else this._drawAegis(ctx, s.aegis, now);
 
     /* ---- 雷电链（在角色上面） ---- */
     this.lightning = s.director.lightning || [];
@@ -350,20 +346,25 @@ export class Renderer {
   /* ---------------- 地面 ---------------- */
 
   _drawGround(ctx) {
-    // 底色：深土
-    ctx.fillStyle = '#241d16';
+    ctx.fillStyle = '#0a1423';
     ctx.fillRect(
-      -this.vw / 2 - 40, -this.vh / 2 - 40,
-      this.vw + 80, this.vh + 80,
+      -this.vw / this.scale / 2 - 50, -this.vh / this.scale / 2 - 50,
+      this.vw / this.scale + 100, this.vh / this.scale + 100,
     );
-
-    /*
-     * 地砖网格。
-     * 用极低对比度的线，让地面有"尺度"，但不抢戏。
-     */
-    ctx.strokeStyle = 'rgba(255,255,255,0.028)';
-    ctx.lineWidth = 1 / this.scale;
-    const half = Math.ceil(Math.max(this.vw, this.vh) / 2 / TILE) + 2;
+    // Static star positions: no random allocations or flicker during rendering.
+    const spanX = this.vw / this.scale, spanY = this.vh / this.scale;
+    for (let i = 0; i < 110; i++) {
+      const hash = Math.sin(i * 127.1 + 42) * 43758.5453;
+      const hashY = Math.sin(i * 311.7 + 19) * 12415.418;
+      const x = ((hash - Math.floor(hash)) - .5) * spanX;
+      const scroll = this.flight ? this.flight.phase * (i % 3 + 1) * .4 : 0;
+      const y = (((hashY - Math.floor(hashY)) * spanY + scroll) % spanY) - spanY / 2;
+      ctx.fillStyle = i % 9 === 0 ? '#577d9a' : '#263e58';
+      ctx.fillRect(x, y, i % 9 === 0 ? 1.5 : .8, i % 9 === 0 ? 1.5 : .8);
+    }
+    ctx.strokeStyle = 'rgba(99,148,183,0.045)';
+    ctx.lineWidth = .6 / this.scale;
+    const half = Math.ceil(Math.max(spanX, spanY) / 2 / TILE) + 2;
     ctx.beginPath();
     for (let i = -half; i <= half; i++) {
       ctx.moveTo(i * TILE, -half * TILE);
@@ -377,18 +378,35 @@ export class Renderer {
      * 竞技场圆形边界。
      * 这是"战场"的范围感，也提示怪物从边缘进来。
      */
-    ctx.strokeStyle = 'rgba(200,160,90,0.22)';
-    ctx.lineWidth = 2 / this.scale;
+    if (this.flight) {
+      this._drawFlightLanes(ctx);
+      return;
+    }
+    ctx.strokeStyle = 'rgba(99,175,175,0.23)';
+    ctx.lineWidth = 1 / this.scale;
     ctx.beginPath();
     ctx.arc(ARENA.cx, ARENA.cy, ARENA.r, 0, Math.PI * 2);
     ctx.stroke();
 
-    // 边界内的暗角（便宜的做法：一圈半透明）
-    ctx.strokeStyle = 'rgba(0,0,0,0.18)';
-    ctx.lineWidth = 14 / this.scale;
-    ctx.beginPath();
-    ctx.arc(ARENA.cx, ARENA.cy, ARENA.r - 6, 0, Math.PI * 2);
-    ctx.stroke();
+    for (const radius of [ARENA.r + 13, ARENA.r * .65, ARENA.r * .32]) {
+      ctx.strokeStyle = 'rgba(95,154,176,0.09)';
+      ctx.beginPath(); ctx.arc(0,0,radius,0,Math.PI*2); ctx.stroke();
+    }
+    for (let i = 0; i < 96; i++) {
+      const angle = i * Math.PI / 48;
+      const major = i % 8 === 0;
+      ctx.strokeStyle = major ? '#35576b' : '#1c344b';
+      const inner = ARENA.r + 14, outer = inner + (major ? 9 : 3);
+      ctx.beginPath(); ctx.moveTo(Math.cos(angle)*inner,Math.sin(angle)*inner); ctx.lineTo(Math.cos(angle)*outer,Math.sin(angle)*outer); ctx.stroke();
+    }
+    // A quiet orbital dock makes the home vessel readable even when the stream is idle.
+    ctx.strokeStyle = '#244d52';
+    ctx.beginPath(); ctx.arc(0,0,38,0,Math.PI*2); ctx.stroke();
+    ctx.strokeStyle = '#396b69';
+    for (let i = 0; i < 4; i++) {
+      const a = i * Math.PI / 2 + .22;
+      ctx.beginPath(); ctx.arc(0,0,44,a,a+.38); ctx.stroke();
+    }
   }
 
   _drawStains(ctx) {
@@ -398,6 +416,114 @@ export class Renderer {
       ctx.fillRect(st.x - st.r, st.y - st.r, st.r * 2, st.r * 2);
     }
     ctx.globalAlpha = 1;
+  }
+
+  _drawFlightLanes(ctx) {
+    ctx.fillStyle = 'rgba(40,104,112,.035)';
+    ctx.fillRect(-210,-300,420,600);
+    for (const side of [-1,1]) {
+      ctx.strokeStyle = '#20394f'; ctx.lineWidth = .8;
+      ctx.beginPath(); ctx.moveTo(side*215,-290); ctx.lineTo(side*215,290); ctx.stroke();
+      for (let i = 0; i < 14; i++) {
+        const y = ((i*48+this.flight.phase*.5)%640)-320;
+        ctx.fillStyle = '#355164'; ctx.fillRect(side*215-2,y,4,10);
+      }
+    }
+    ctx.strokeStyle = '#223b50'; ctx.lineWidth = .7;
+    ctx.beginPath(); ctx.moveTo(-190,105);ctx.lineTo(-155,105);ctx.moveTo(155,105);ctx.lineTo(190,105);ctx.stroke();
+    ctx.fillStyle = '#3b5a70'; ctx.font = '7px monospace'; ctx.textAlign = 'center';
+    ctx.fillText('AUTOPILOT / FLIGHT CORRIDOR',0,265);
+  }
+
+  _drawFlightTraffic(ctx) {
+    ctx.save();
+    for (const m of this.flight.missiles) {
+      if (m.warning > 0) {
+        ctx.globalAlpha = .2 + m.warning*.6; ctx.strokeStyle = '#7e90a5'; ctx.lineWidth = .6;
+        ctx.beginPath();ctx.moveTo(m.x-5,-232);ctx.lineTo(m.x,-225);ctx.lineTo(m.x+5,-232);ctx.stroke();
+        continue;
+      }
+      ctx.globalAlpha = .65;
+      if (m.boss) {
+        ctx.fillStyle='#c2a1ff';ctx.beginPath();ctx.arc(m.x,m.y,3,0,Math.PI*2);ctx.fill();
+        ctx.strokeStyle='#8960b9';ctx.lineWidth=2;
+        ctx.beginPath();ctx.moveTo(m.x,m.y-7);ctx.lineTo(m.x-m.vx*.09,m.y-m.speed*.09);ctx.stroke();
+        continue;
+      }
+      ctx.fillStyle = '#2b4561'; ctx.fillRect(m.x-1.5,m.y-24,3,19);
+      ctx.fillStyle = '#7992b0'; ctx.fillRect(m.x-2,m.y-7,4,11);
+      ctx.fillStyle = '#c8dae6'; ctx.fillRect(m.x-1,m.y+3,2,3);
+      ctx.fillStyle = '#496c8b'; ctx.fillRect(m.x-4,m.y-5,2,5);ctx.fillRect(m.x+2,m.y-5,2,5);
+    }
+    ctx.globalAlpha = .85;
+    for (const shot of this.flight.shots) {
+      ctx.strokeStyle = '#76e4c5'; ctx.lineWidth=1.2;
+      ctx.beginPath();ctx.moveTo(shot.x,shot.y);ctx.lineTo(shot.x-shot.vx*.018,shot.y-shot.vy*.018);ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  _flightSprite(key) {
+    if (!this._flightSprites) this._flightSprites = new Map();
+    if (this._flightSprites.has(key)) return this._flightSprites.get(key);
+    const original = this.sprites[key];
+    const canvas = document.createElement('canvas');
+    canvas.width = original.height; canvas.height = original.width;
+    const target = canvas.getContext('2d');
+    target.imageSmoothingEnabled = false;
+    target.translate(canvas.width/2,canvas.height/2);
+    target.rotate(-Math.PI/2);
+    target.drawImage(original,-original.width/2,-original.height/2);
+    this._flightSprites.set(key,canvas);
+    return canvas;
+  }
+
+  _drawFlightHero(ctx,p) {
+    const sp = this._flightSprite(ROLES.hero.idle);
+    ctx.save();ctx.translate(p.x,p.y);ctx.rotate(this.flight.hero.bank);
+    // Twin engine plumes are propulsion ambience, not task execution.
+    const flame = 16 + Math.sin(this.flight.time*24)*4;
+    for (const x of [-11,11]) {
+      ctx.fillStyle = '#214c67';ctx.fillRect(x-3,13,6,flame+9);
+      ctx.fillStyle = '#4faeaf';ctx.fillRect(x-2,13,4,flame);
+      ctx.fillStyle = '#b4f2df';ctx.fillRect(x-1,13,2,flame*.5);
+    }
+    ctx.drawImage(sp,-sp.width/2,-sp.height/2);
+    const hit = this.flight.time < this.flight.invulnerableUntil;
+    if (hit && this._fx?.flash !== false) {
+      if (!this._flightHitSprite) {
+        const mask=document.createElement('canvas');mask.width=sp.width;mask.height=sp.height;
+        const paint=mask.getContext('2d');paint.drawImage(sp,0,0);
+        paint.globalCompositeOperation='source-in';paint.fillStyle='#ffe1e4';paint.fillRect(0,0,sp.width,sp.height);
+        this._flightHitSprite=mask;
+      }
+      ctx.globalAlpha=.8*Math.max(0,(this.flight.invulnerableUntil-this.flight.time-.3)/.35);
+      ctx.drawImage(this._flightHitSprite,-sp.width/2,-sp.height/2);
+    }
+    ctx.restore();
+    ctx.save();
+    for (const e of this.flight.effects) {
+      const heal=e.kind==='heal', spark=e.kind==='spark';
+      const life=spark ? .28 : .9;
+      if(e.age>life) continue;
+      ctx.globalAlpha=1-e.age/life;
+      ctx.strokeStyle=heal?'#76e4c5':spark?'#e8d5ff':'#ff9d9d';
+      ctx.fillStyle=ctx.strokeStyle;ctx.lineWidth=1.5;
+      const radius=spark?3+e.age*18:24+e.age*45;
+      ctx.beginPath();ctx.arc(e.x,e.y,radius,0,Math.PI*2);ctx.stroke();
+      if(!heal) for(let i=0;i<8;i++) {
+        const a=i*Math.PI/4+e.age;
+        ctx.fillRect(e.x+Math.cos(a)*radius-1,e.y+Math.sin(a)*radius-1,2,2);
+      }
+      if(e.text) {
+        ctx.font='bold 10px sans-serif';ctx.textAlign='center';
+        ctx.fillText(e.text,e.x,e.y-36-e.age*25);
+      }
+    }
+    ctx.restore();
+    this._tip = { x:p.x,y:p.y-22 };
+    ctx.strokeStyle = 'rgba(118,228,197,.25)';ctx.lineWidth=.7;
+    ctx.beginPath();ctx.arc(p.x,p.y,31,Math.PI*.12,Math.PI*.88);ctx.stroke();
   }
 
   /* ---------------- 敌人 ---------------- */
@@ -483,7 +609,7 @@ export class Renderer {
   }
 
   _drawEnemy(ctx, e, now) {
-    const sp = this.sprites[e.sprite] || this.sprites[ROLES.enemy.unknown];
+    const sp = this.flight ? this._flightSprite(e.sprite in this.sprites ? e.sprite : ROLES.enemy.unknown) : this.sprites[e.sprite] || this.sprites[ROLES.enemy.unknown];
     const dying = e.diedAt !== null;
 
     /*
@@ -550,7 +676,13 @@ export class Renderer {
     }
 
     /* 影子先画（在敌人本体下面） */
-    this._drawShadow(ctx, e, sp, w, h, scaleMul, dying ? alpha * 0.55 : 0.39);
+    // Engine signatures replace ground-contact shadows in the orbital scene.
+    ctx.save();
+    ctx.globalAlpha = alpha * .24;
+    ctx.strokeStyle = e.tier === TIER.BOSS ? '#b6a3f4' : '#efa578';
+    ctx.lineWidth = .8;
+    ctx.beginPath(); ctx.arc(e.x,e.y,Math.max(w,h)*.65,0,Math.PI*2); ctx.stroke();
+    ctx.restore();
 
     ctx.save();
     ctx.globalAlpha = alpha;
@@ -726,7 +858,13 @@ export class Renderer {
   }
 
   _drawHpBar(ctx, e, now, w, h, dying = false) {
-    const ratio = e.hpRatio(now);
+    const flightBoss = this.flight && e.tier === TIER.BOSS && e.flight;
+    const ratio = flightBoss ? (e.killed ? 0 : e.flight.hull) : e.hpRatio(now);
+    if (flightBoss && !dying) {
+      ctx.save();ctx.fillStyle='#c2a1ff';ctx.font='9px sans-serif';ctx.textAlign='center';
+      ctx.fillText(`BOSS · 装甲 ${Math.ceil(ratio*100)}% · 等待任务结算`,e.x,e.y+h/2+16);
+      ctx.restore();
+    }
     /*
      * 血条宽度跟着体型走，但有下限 16px ——
      * 小兵只有 8×8，如果按 w*0.9 画就只有 7px，看不清掉血过程。
@@ -1405,7 +1543,7 @@ export class Renderer {
      * 所以这条的血量含义就是"预估进度"，不是真实 HP。
      */
     const boss = d.enemies.find((e) => e.tier === TIER.BOSS && e.diedAt === null);
-    if (boss) {
+    if (boss && !this.flight) {
       const W = this.cv.width;
       const ratio = boss.hpRatio(now);
 
@@ -1481,7 +1619,7 @@ export class Renderer {
      * 本轮已结束的横幅。
      * 成功 = 清场（这是用户要的"最终击杀"）；失败 = 没打赢，敌人还在。
      */
-    if (d.turnDone) {
+    if (d.turnDone && (!this.flight || s.now - d.finaleAt < 2500)) {
       const W = this.cv.width;
       const H = this.cv.height;
       ctx.save();

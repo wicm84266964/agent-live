@@ -3,153 +3,70 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>实况智能体 · 星海防线</title>
-<!--
-  Favicon：内联 SVG data-URI。
-
-  ===== 为什么不是 favicon.ico =====
-  npm run demo / npm run serve 都是零依赖静态服务，没有 /favicon.ico
-  这个文件；浏览器会**每次加载**都去要一次，拿 404，于是控制台永远挂着
-  一条错误 —— "零 console 错误"这条验收项因此永远过不了。
-
-  ===== 为什么不用 .ico =====
-  .ico 是二进制格式，塞进文本仓库既不可 review 也不可 diff。
-  用 data-URI 的 SVG：一个文件都不用多，服务端零改动，
-  画什么也能直接在源码里读到。
-
-  图案 = 星海防线的品牌隐喻：深空底 + 一道弧形防线 + 中央的守位光点。
-  颜色与 shield.css 的变量同值（--bg / --gold / --cyan），
-  改主题时两处要一起改（这里不能写 var()：SVG data-URI 里没有 CSS 变量）。
--->
+<meta name="theme-color" content="#080e19">
+<title>实况智能体 · 执行现场</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='7'%20fill='%23070b16'/%3E%3Cpath%20d='M5%2022a11%2011%200%200%201%2022%200'%20fill='none'%20stroke='%232bd4d4'%20stroke-width='2.5'%20stroke-linecap='round'/%3E%3Cpath%20d='M9%2023a7%207%200%200%201%2014%200'%20fill='none'%20stroke='%23f2c14e'%20stroke-width='2'%20stroke-linecap='round'/%3E%3Ccircle%20cx='16'%20cy='10'%20r='2.6'%20fill='%23ffd76e'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="shield.css">
+<link rel="stylesheet" href="studio.css">
 </head>
 <body>
-
-<div id="stage">
-  <canvas id="cv"></canvas>
-
-  <!--
-    顶部 HUD，分两层。
-
-    运行态（默认）：只留三个能一眼读的数 —— 场上敌人、已击杀、当前连击。
-    检视态（按 I 或暂停）：展开完整明细（事件数、挥击、未映射、超时、fps…）。
-
-    这样做的理由：运行中人的注意力在战场，一堆数字只会互相干扰；
-    但分析用的数据不能丢，只是挪到"你想看的时候"。
-
-    唯一不能挪的是诚实字段（未映射 / 超时）：它们一旦非零就是
-    "有工具没被映射"或"有任务超了预估"，藏起来等于假报告。
-    所以它们在运行态保留一个警示角标，非零才出现。
-  -->
-  <div id=hud>
-    <div id="hudLine1">—</div>
-    <div id="hudCombo"></div>
-    <div id="hudWarn"></div>
-    <div id="hudDetail">—</div>
-  </div>
-
-  <!-- BOSS 模式的边框提示 -->
-  <div id="hudBoss"></div>
-
-  <!--
-    事件源状态条。
-    它存在的唯一理由是**诚实**：任何时候人都能看到"现在播的是哪份数据"。
-    载入失败时它变成红色错误条，并且**不会**偷偷回退到样本数据。
-  -->
-  <div id="sourceNote" class="note"></div>
-
-  <!-- 飘提示 -->
-  <div id="toast"></div>
-
-  <!--
-    开始面板 / 落地页。
-
-    注意这里**没有硬编码的业务文案**：标题、分级名、诚实声明全部是空壳，
-    由 main.mjs 的 applyPanelCopy() 从 theme.mjs 填进来。
-    这样换题材只需要改 theme.mjs 一个文件，HTML 不用动。
-    data-theme 的值就是 theme 里 copy 的槽位名。
-
-    三个入口的顺序就是推荐顺序：
-      1. 一键演示   —— 不传任何数据，直接播仓库自带的真实样本战斗
-      2. 拖入文件   —— 播你自己的会话（session-analysis.json / real-events.json / .jsonl）
-      3. 连接钩子   —— 智能体边跑边看（SSE 实时流）
-  -->
-  <div id="startPanel">
-    <h1 data-theme="panel-title">实况智能体</h1>
-    <p class="brand-en" data-theme="panel-en">agent-live</p>
-    <p class="sub" data-theme="panel-sub">智能体执行过程的实时战场</p>
-
-    <div class="entries">
-      <!-- 1. 一键演示 -->
-      <div class="entry">
-        <button id="startBtn" class="primary" data-theme="start-button">进入战场</button>
-        <span class="entry-hint">一键演示 · 不传数据也能播放真实样本战斗</span>
-      </div>
-
-      <!-- 2. 拖入分析文件 -->
-      <div class="entry">
-        <!--
-          tabindex="0"：拖放区本身不是可聚焦元素，键盘用户无法 Tab 进来
-          确认"这里能丢文件"。加上之后它参与 Tab 序，并且有 :focus-visible
-          的青色描边（见 shield.css 的键盘焦点一节）。
-          role/aria-label 让它被读屏念成"拖入分析文件区"而不是一个空 div；
-          真正的操作入口仍是里面的「选择文件…」按钮。
-        -->
-        <div id="dropZone" class="drop" tabindex="0" role="group"
-             aria-label="拖入分析文件区：焦点在此处可用回车选择文件">
-          <span class="drop-title">拖入分析文件</span>
-          <span class="drop-sub">
-            <code>session-analysis.json</code> · <code>real-events.json</code> · <code>.jsonl</code>
-          </span>
-          <button id="pickBtn" class="ghost" type="button">选择文件…</button>
-          <input id="filePick" type="file"
-                 accept=".json,.jsonl,application/json" hidden>
-          <span id="dropErr" class="drop-err"></span>
-        </div>
-      </div>
-
-      <!-- 3. 连接 HTTP hook -->
-      <div class="entry">
-        <div class="hook">
-          <span class="hook-title">连接 HTTP hook</span>
-          <span class="hook-sub">
-            先 <code>npm run hook</code>。地址会自动改成当前页面来源。
-          </span>
-          <div class="hook-row">
-            <input id="hookInput" type="text" spellcheck="false"
-                   placeholder="http://127.0.0.1:8787" value="http://127.0.0.1:8787">
-            <button id="hookBtn" class="ghost" type="button">连接</button>
+<div class="app-shell">
+  <aside class="rail" aria-label="工作台导航">
+    <a class="app-mark" href="./" aria-label="实况智能体首页"><svg viewBox="0 0 32 32" fill="none"><path d="M16 3 28 25H4L16 3Z" stroke="currentColor" stroke-width="2"/><path d="m16 11 5 10H11l5-10Z" fill="currentColor"/></svg></a>
+    <button class="rail-btn active" id="battleNav" title="执行现场" aria-label="执行现场"><svg viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="14" rx="3"/><path d="m6 13 4-4 4 5 4-3M9 21h6"/></svg><span>实况</span></button>
+    <button class="rail-btn" id="sourceNav" title="选择事件源" aria-label="选择事件源"><svg viewBox="0 0 24 24" fill="none"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 4 16 4 16 0V5M4 12v7c0 4 16 4 16 0v-7"/></svg><span>来源</span></button>
+    <button class="rail-btn" id="helpNav" title="使用说明" aria-label="使用说明"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 5m0 2v1"/></svg><span>说明</span></button>
+    <span class="rail-bottom">AL<span class="online-dot"></span></span>
+  </aside>
+  <header class="app-header">
+    <div class="wordmark">AGENT<span>LIVE</span><span class="header-divider"></span><span class="workspace-label">本地工作台</span></div>
+    <div class="header-right"><span class="local-label">仅在本机运行</span><span id="connectionBadge" class="status-badge"><i></i><span>等待连接</span></span></div>
+  </header>
+  <main class="workspace">
+    <section class="page-heading">
+      <div><p class="eyebrow">MISSION CONTROL <span>/ 01</span></p><h1>执行现场<span class="heading-dot">.</span></h1><p class="page-subtitle">让每一次调用，都有迹可循。</p></div>
+      <div class="source-select"><label for="sessionSelect">当前会话</label><div class="select-row"><select id="sessionSelect" aria-label="当前 Codex 会话"><option value="">正在发现本机会话…</option></select><button id="refreshSessions" class="icon-button" title="刷新会话列表" aria-label="刷新会话列表">↻</button></div></div>
+    </section>
+    <div id="appNotice" class="app-notice" role="status" hidden></div>
+    <section class="metrics" aria-label="执行统计">
+      <article class="metric"><span class="metric-label"><i class="metric-dot mint"></i>已接收调用</span><strong id="metricTotal">0</strong><small id="metricSource">等待真实事件</small><span class="metric-glyph">↗</span></article>
+      <article class="metric"><span class="metric-label"><i class="metric-dot blue"></i>执行中</span><strong id="metricActive">0</strong><small id="metricActiveHint">以事件开始与结束为准</small><span class="metric-glyph">⌁</span></article>
+      <article class="metric"><span class="metric-label"><i class="metric-dot mint"></i>成功完成</span><strong id="metricSuccess">0</strong><small id="metricSuccessHint">尚无已完成调用</small><span class="metric-glyph">✓</span></article>
+      <article class="metric"><span class="metric-label"><i class="metric-dot orange"></i>累计工具耗时</span><strong id="metricDuration">—</strong><small id="metricDurationHint">仅统计日志中的真实耗时</small><span class="metric-glyph">◷</span></article>
+    </section>
+    <div class="command-grid">
+      <section class="battle-card" aria-label="实况战场">
+        <div class="card-heading"><div><span class="section-index">01</span><h2>星海防线</h2><span id="modeBadge" class="mode-badge">待机</span></div><div class="battle-actions"><button id="pauseButton" class="small-button" disabled>暂停</button><button id="motionButton" class="small-button" aria-pressed="false">柔和特效</button><button id="openSourceButton" class="small-button">切换来源 ↗</button></div></div>
+        <div id="stage">
+          <canvas id="cv" aria-label="由真实工具事件驱动的星海战场"></canvas>
+          <div class="sector-label">SECTOR 07 <span>VERTICAL ASSAULT</span></div>
+          <div class="flight-status"><span id="pilotState">自动巡航</span><div class="pilot-vitals"><meter id="pilotHp" min="0" max="100" value="100" aria-label="飞船生命值"></meter><b id="pilotHpText">100 / 100</b><em>锁血 · 最低 1 HP</em></div><small>击杀补给 +12 HP · 飞船血量不计任务战绩</small></div>
+          <div id="hud"><div id="hudLine1">—</div><div id="hudCombo"></div><div id="hudWarn"></div><div id="hudDetail">—</div></div>
+          <div id="hudBoss"></div><div id="sourceNote" class="note" aria-live="polite"></div><div id="toast" role="status"></div>
+          <div id="startPanel">
+            <div class="launch-symbol">⌁</div><p class="brand-en" data-theme="panel-en">agent-live</p><h1 data-theme="panel-title">实况智能体</h1><p class="sub" data-theme="panel-sub">等待你的下一次执行</p>
+            <div class="entries">
+              <div class="entry live-entry"><button id="liveConnect" class="primary">连接当前会话 <span>↗</span></button><span class="entry-hint">自动读取本机日志，无需拖入文件</span></div>
+              <div class="entry"><button id="startBtn" class="ghost" data-theme="start-button">观看样本回放</button><span class="entry-hint">独立演示 · 不计入你的实况</span></div>
+              <details id="importDetails" class="import-details"><summary>导入文件或自定义事件源</summary>
+                <div id="dropZone" class="drop" tabindex="0" role="group" aria-label="拖入分析文件区：焦点在此处可用回车选择文件"><span class="drop-title">拖入分析文件</span><span class="drop-sub">JSON / JSONL 协议事件</span><button id="pickBtn" class="ghost" type="button">选择文件…</button><input id="filePick" type="file" accept=".json,.jsonl,application/json" hidden><span id="dropErr" class="drop-err" role="alert"></span></div>
+                <div class="hook"><label for="hookInput" class="hook-title">本地事件源地址</label><div class="hook-row"><input id="hookInput" type="url" spellcheck="false" placeholder="http://127.0.0.1:8787" value="http://127.0.0.1:8787"><button id="hookBtn" class="ghost" type="button">连接</button></div><span id="hookState" class="hook-state" role="status"></span></div>
+              </details>
+            </div>
           </div>
-          <span id="hookState" class="hook-state"></span>
+          <div id="idleState" class="idle-state" hidden><span class="idle-pulse"></span><span id="idleTitle">连接已就绪，等待工具事件</span><small id="idleHint">工具完成后将自动同步到这里</small></div>
+          <div class="arena-coordinate">X <span>000</span> &nbsp; Y <span>000</span><span id="renderFps">— FPS</span></div>
         </div>
-      </div>
+        <div class="battle-footer"><span><i class="legend-dot mint"></i>守望舰</span><span><i class="legend-dot orange"></i>任务敌舰</span><span><i class="legend-dot blue"></i>环境飞弹</span><span class="footer-note">环境飞弹不计战绩 · 任务按真实结果结算</span></div>
+      </section>
+      <aside class="inspector">
+        <section class="source-card"><div class="side-heading"><h2>数据源</h2><span class="mini-label" id="sourceKind">LOCAL</span></div><div class="source-identity"><div class="source-avatar">⌘</div><div><strong id="sourceName">Codex 会话</strong><span id="sourceSubtitle">等待连接</span></div><span id="sourceLight" class="source-light"></span></div><dl class="source-facts"><div><dt>同步方式</dt><dd id="syncMode">工具完成后同步</dd></div><div><dt>最近事件</dt><dd id="lastEventTime">尚未收到</dd></div><div><dt>异常 / 未映射</dt><dd id="sourceIssues">0 / 0</dd></div></dl><p class="source-caption" id="sourceCaption">连接本机会话后自动更新，原始对话内容不会传出本机。</p></section>
+        <section class="activity-card"><div class="side-heading"><h2>调用动态 <span id="activityCount">0</span></h2><span class="mini-label">RECENT</span></div><div id="activityList" class="activity-list" aria-label="最近调用"><div class="activity-empty"><span>⌁</span><strong>等待第一条真实事件</strong><p>调用名称、结果和耗时<br>会按发生顺序记录在这里。</p></div></div><div class="activity-footnote">最多保留最近 100 条调用</div></section>
+      </aside>
     </div>
-
-    <div class="rules">
-      <div class="rule">
-        <span class="tag minion" data-theme="tag-minion">侦察机</span>
-        <span class="desc" data-theme="desc-minion"></span>
-      </div>
-      <div class="rule">
-        <span class="tag elite" data-theme="tag-elite">突击舰</span>
-        <span class="desc" data-theme="desc-elite"></span>
-      </div>
-      <div class="rule">
-        <span class="tag boss" data-theme="tag-boss">母舰</span>
-        <span class="desc" data-theme="desc-boss"></span>
-      </div>
-      <p class="rule-note">一个敌人 = 一次工具调用。出场是 <code>tool</code>，死亡只由 <code>tool_end</code> 结算。</p>
-    </div>
-
-    <p class="honest" data-theme="honest-death"></p>
-    <p class="honest honest-2" data-theme="honest-source"></p>
-    <p class="honest honest-3" data-theme="honest-time"></p>
-
-    <p class="keys" data-theme="keys-hint">空格 开始 / 暂停 · P 暂停 · R 重播</p>
-  </div>
+    <footer class="workspace-footer"><span><i class="online-dot"></i>一个敌人 = 一次工具调用<span class="footer-divider">/</span>真实事件驱动</span><span>AGENT LIVE <span class="version-label">LOCAL EDITION</span></span></footer>
+  </main>
 </div>
-
+<dialog id="helpDialog" class="help-dialog"><div class="side-heading"><h2>关于这场实况</h2><button id="closeHelp" class="icon-button" aria-label="关闭说明">×</button></div><p>每艘来袭舰船代表一次工具调用。只有真实的成功结束事件才会记为击毁；失败独立计数。</p><div class="rules"><div class="rule"><span class="tag minion" data-theme="tag-minion"></span><span class="desc" data-theme="desc-minion"></span></div><div class="rule"><span class="tag elite" data-theme="tag-elite"></span><span class="desc" data-theme="desc-elite"></span></div><div class="rule"><span class="tag boss" data-theme="tag-boss"></span><span class="desc" data-theme="desc-boss"></span></div></div><p class="honest" data-theme="honest-death"></p><p class="honest" data-theme="honest-source"></p><p class="honest" data-theme="honest-time"></p><p>Codex 当前使用完成记录还原调用开始与结束，无法显示尚未完成的调用。未识别、缺少状态或格式异常的记录会明确计数。</p><p class="keys" data-theme="keys-hint"></p></dialog>
 <script type="module" src="main.mjs"></script>
-</body>
-</html>
+</body></html>

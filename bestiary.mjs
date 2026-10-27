@@ -99,7 +99,7 @@ const RULES = [
   {
     // 子智能体 —— 母舰。独立长跑，最重。
     tier: TIER.BOSS,
-    match: /^(agent_run|task|agent)$/,
+    match: /^(agent_run|task|agent|spawn_agent|collaboration.spawn_agent)$/,
     sprite: spriteOf(TIER.BOSS),
     label: '子智能体',
     /*
@@ -112,7 +112,7 @@ const RULES = [
   {
     // 起进程 —— 突击舰。秒级，实测中位 482ms、最大 15.4s。
     tier: TIER.ELITE,
-    match: /^(bash|powershell|pwsh|background_shell|commandexecution|exec|shell|exec_command)$/,
+    match: /^(bash|powershell|pwsh|background_shell|commandexecution|exec|shell|exec_command|js|javascript|python|node|write_stdin)$/,
     sprite: spriteOf(TIER.ELITE),
     label: '执行',
     expectMs: 6000,

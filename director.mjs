@@ -606,11 +606,7 @@ export class Enemy {
    * 刻意返回"清零前还剩多少"：渲染层用它决定处决雷有多粗
    * （血越多，处决越重）。
    */
-  applyExecution() {
-    const remaining = Math.max(0, 1 - this.hpLost);
-    this.hpLost = 1;
-    return remaining;
-  }
+
 
   /** 死亡后是否还在展示期（名字要显示到这时候） */
   isDying(now) {
@@ -657,6 +653,8 @@ export class Director {
     this.enemies = [];
     /** 已离场的敌人（保留用于结算与验证，不参与渲染） */
     this.gone = [];
+    this.settledIds = new Set();
+    this.clearedCount = 0;
 
     /** 真实事件计数 */
     this.seen = 0;
@@ -775,6 +773,13 @@ export class Director {
   }
 
   _spawnTool(ev, now) {
+    if (ev.id != null && (this.settledIds.has(String(ev.id)) || this.enemies.some(e => e.callId === String(ev.id)))) {
+      this.duplicates++;
+      return null;
+    }
+    this.turnDone = false;
+    this.turnOk = false;
+    this.finaleAt = null;
     this.seen++;
     const e = new Enemy(ev, now, this.arena, this.random);
     this.enemies.push(e);
@@ -858,7 +863,7 @@ export class Director {
       let alreadyDead;
       if (ev.id != null) {
         const want = String(ev.id);
-        alreadyDead = this.enemies.some((e) => e.callId === want && e.diedAt !== null)
+        alreadyDead = this.settledIds.has(want) || this.enemies.some((e) => e.callId === want && e.diedAt !== null)
           || this.gone.some((e) => e.callId === want);
       } else {
         alreadyDead = this.enemies.some((e) => e.tool === ev.tool && e.diedAt !== null)
@@ -885,6 +890,10 @@ export class Director {
   /** 真实结束：这是**唯一**的死亡途径。 */
   _settle(e, ok, now) {
     if (!e || e.diedAt !== null) return;
+    if (e.callId != null) {
+      this.settledIds.add(String(e.callId));
+      while (this.settledIds.size > 10000) this.settledIds.delete(this.settledIds.values().next().value);
+    }
     /*
      * 顺序很关键：**先**取血条快照，**再**标记 diedAt。
      *
@@ -1271,8 +1280,6 @@ export class Director {
       this._swingAcc -= interval;
 
       // 每一拍重新取目标：一拍之内目标可能死了，要换人打
-      swingsNow++;
-
       const t = this.target(now, aegis.x, aegis.y);
       if (!t) continue;
 
@@ -1288,6 +1295,7 @@ export class Director {
        */
       const dt0 = Math.hypot(t.x - aegis.x, t.y - aegis.y);
       if (dt0 > COMBAT.reach) continue;
+      swingsNow++;
 
       /*
        * ===== 从这里开始：一条雷电链 =====
@@ -1379,6 +1387,11 @@ export class Director {
     }
     this.enemies = keep;
 
+    if (this.gone.length > 1000) {
+      this.clearedCount += this.gone.length - 1000;
+      this.gone.splice(0, this.gone.length - 1000);
+    }
+    if (this.log.length > 1000) this.log.splice(0, this.log.length - 1000);
     return { swings: swingsNow, damage: damageNow };
   }
 
@@ -1464,7 +1477,7 @@ export class Director {
       damage: this.damage,
       turnDone: this.turnDone,
       turnOk: this.turnOk,
-      cleared: this.gone.length,
+      cleared: this.clearedCount + this.gone.length,
     };
   }
 }

@@ -33,7 +33,9 @@ import { TIER } from './bestiary.mjs';
  *
  * protocol/events.mjs 是纯函数、无 node 内置依赖，浏览器里能直接 import。
  */
-import { KIND, normalize } from './protocol/events.mjs';
+import { KIND, normalize, pairReport } from './protocol/events.mjs';
+import { LiveBuffer } from './protocol/live-buffer.mjs';
+import { FlightScene } from './flight-scene.mjs';
 
 /*
  * ===== 事件源：真实会话，不是手写剧本 =====
@@ -73,10 +75,21 @@ const realSrc = await (!inBrowser
       new URL('./real-events.json', import.meta.url), 'utf8',
     ),
   )
-  : await (await fetch('./real-events.json')).json());
+  : await fetch('./real-events.json').then(response => {
+    if (!response.ok) throw new Error(`样本文件读取失败 (${response.status})`);
+    return response.json();
+  }).catch(error => ({ events: [], meta: { tools: 0, maxConcurrent: 0 }, error: error.message })));
 /* 样本战斗：一键演示播的就是它，且它必须真的存在（读不到就抛，不静默给空数组） */
 const SAMPLE_EVENTS = realSrc.events;
 const SAMPLE_META = realSrc.meta;
+const activity = new Map();
+let activityVersion = 0;
+let actualDuration = 0;
+let durationSamples = 0;
+let connection = 'idle';
+let wireIssues = 0;
+const liveBuffer = new LiveBuffer();
+const flight = new FlightScene();
 
 /* ============================================================
  *  事件源：三路接入（一键演示 / 拖入文件 / HTTP 钩子）
@@ -202,9 +215,7 @@ function finalizeSource(rawEvents, extra = {}, label = '未知事件源') {
    * 文件里本来就带 turn_end 的（real-events.json 就带），不重复补。
    * 注意：不给 ok:false 的事件补清场，那会把"有失败"演成"全歼"。
    */
-  if (!arr.some((e) => e.kind === KIND.TURN_END)) {
-    arr.push({ kind: KIND.TURN_END, ok: true, ts: playDur + 400, synthesized: true });
-  }
+  // Reaching EOF is not evidence that a turn succeeded. Never synthesize a victory.
   const lastTs = arr.reduce((a, e) => Math.max(a, e.ts), 0);
 
   const meta = {
@@ -320,6 +331,10 @@ function fromEventList(list, extra, label) {
         + '每条至少需要 kind + ts；tool/tool_end 还需要 tool。',
     };
   }
+  const pairs = pairReport(accepted);
+  if (rejects.length || unknownKinds.size || !pairs.perfect) {
+    return { ok: false, message: `事件文件未通过校验：拒收 ${list.length - accepted.length} 条，未知类型 ${unknownKinds.size} 种，调用配对 ${pairs.paired}/${pairs.callsTotal}。请先运行 npm run doctor 检查源文件。` };
+  }
   const res = finalizeSource(accepted, extra, label || '拖入的事件文件');
   if (res.ok) {
     res.rejected = list.length - accepted.length;
@@ -348,6 +363,7 @@ function fromJsonlText(text, label) {
       message: `不是合法 JSON，也不是 JSONL：${bad} 行全部解析失败。`,
     };
   }
+  if (bad) return { ok: false, message: `JSONL 有 ${bad} 行无法解析，文件未载入。请修复后重试。` };
   const res = fromEventList(list, {}, label || `拖入的 JSONL（${bad} 行坏行已跳过）`);
   if (res.ok && bad) res.badLines = bad;
   return res;
@@ -575,6 +591,9 @@ function setPaused(v) {
    * 话题，所以清除逻辑挂在**唯一的暂停状态变更函数**上。
    */
   clearLoadError();
+  if (!paused && liveMode) {
+    for (const event of liveBuffer.drain()) feed(event);
+  }
   return paused;
 }
 
@@ -595,6 +614,21 @@ let fpsAt = 0;
  *   __shield.emit({ kind:'turn_end', ok:true })                // 清场
  */
 function feed(ev) {
+  if (ev.kind === KIND.TOOL || ev.kind === KIND.TOOL_END) {
+    const key = ev.id == null ? `${ev.tool}:${ev.ts}` : String(ev.id);
+    const previous = activity.get(key);
+    const row = { ...previous, id: key, tool: ev.tool, ts: ev.ts,
+      status: ev.kind === KIND.TOOL_END ? (ev.ok ? 'success' : 'failed') : 'running',
+      realMs: ev.realMs ?? previous?.realMs };
+    activity.delete(key);
+    activity.set(key, row);
+    if (ev.kind === KIND.TOOL_END && previous?.status !== 'success' && previous?.status !== 'failed' && Number.isFinite(ev.realMs)) {
+      actualDuration += ev.realMs;
+      durationSamples++;
+    }
+    while (activity.size > 100) activity.delete(activity.keys().next().value);
+    activityVersion++;
+  }
   /*
    * 事件时间戳统一走 clockNow()。
    *
@@ -604,6 +638,7 @@ function feed(ev) {
   const t = clockNow();
   const before = director.stats(t);
   const r = director.handle(ev, t);
+  if (inBrowser && r && ev.kind === KIND.TOOL) flight.place(r);
   const after = director.stats(t);
 
   /*
@@ -622,6 +657,7 @@ function feed(ev) {
 
   // 有新击杀 → 视觉反馈（震动 + 飘字），但击杀事实来自 director
   if (after.kills > before.kills) {
+    if (inBrowser) flight.heal(after.kills - before.kills);
     /*
      * 击杀的震屏按档位分级。
      *
@@ -644,7 +680,7 @@ function feed(ev) {
     const isBoss = r && r.tier === TIER.BOSS;
     addTrauma(isBoss ? TRAUMA.killBoss : TRAUMA.kill);
     if (r && r.x != null) {
-      renderer.addStain(r.x, r.y, '#5a1a1a');
+      renderer.addStain(r.x, r.y, '#47697c');
       /*
        * 击杀飘字按档位分：BOSS 更大更亮，带 scale punch（1.6）。
        *
@@ -738,8 +774,19 @@ function startDemo() {
    * 它只清"失败态"的条子，不会抹掉随后 showSource 写下的真实来源说明。
    */
   clearLoadError();
+  wireIssues = 0;
+  activity.clear();
+  activityVersion++;
+  actualDuration = 0;
+  durationSamples = 0;
+  director.settledIds.clear();
+  director.lightning.length = 0;
+  renderer.floaters.length = 0;
+  renderer.stains.length = 0;
+  flight.reset();
   director.enemies.length = 0;
   director.gone.length = 0;
+  director.clearedCount = 0;
   director.seen = 0;
   director.kills = 0;
   director.failures = 0;
@@ -771,7 +818,7 @@ function startDemo() {
   director.duplicates = 0;
 
   aegis.x = 0;
-  aegis.y = 0;
+  aegis.y = 155;
   aegis._px = 0;
   aegis._py = 0;
   aegis.vx = 0;
@@ -820,7 +867,7 @@ function tickDemo(now) {
     const ev = EVENTS[demoIndex++];
     feed(ev);
   }
-  if (demoIndex >= EVENTS.length && director.turnDone) {
+  if (demoIndex >= EVENTS.length) {
     playing = false;
   }
 }
@@ -908,6 +955,11 @@ function frame(now) {
   aegis._py = aegis.y;
 
   const res = director.advance(fightDt, fightNow, aegis);
+  if (inBrowser) {
+    const pilot = flight.advance(fightDt, director.enemies);
+    aegis.x = pilot.x;
+    aegis.y = pilot.y;
+  }
 
   /*
    * 由**位置差**算速度，而不是另外维护一个速度变量。
@@ -985,6 +1037,7 @@ function frame(now) {
      * 用户以为键坏了。
      */
     fx: FX,
+    flight: inBrowser ? flight : null,
   });
 
   /* --- HUD --- */
@@ -1059,7 +1112,7 @@ function updateHud(now, fpsNow) {
        * 语义不同，放完也只会显示 301/585，进度条永远读不到满。
        * 现在改成"已结算调用 / 总调用"。
        */
-      `${COPY.hud.calls} ${s.kills}/${META.tools}`,
+      liveMode ? `${COPY.hud.calls} ${s.seen} · 完成 ${s.kills + s.failures}` : `${COPY.hud.calls} ${s.kills + s.failures}/${META.tools}`,
       /*
        * 把并发度写出来。
        *
@@ -1071,7 +1124,7 @@ function updateHud(now, fpsNow) {
        * 而事实是它会并发（放子智能体后继续做别的事）。
        * 这句话就是为了说清：**并发存在，但真实数据里它很短。**
        */
-      `${COPY.hud.concurrent} ${META.maxConcurrent}`,
+      liveMode ? `执行中 ${s.alive}` : `${COPY.hud.concurrent} ${META.maxConcurrent}`,
       `${COPY.hud.swings} ${s.swings}`,
       `${COPY.hud.damage} ${s.damage}`,
       `${COPY.hud.comboBest} ${s.comboBest}`,
@@ -1276,6 +1329,7 @@ function reportLoadError(msg, origin) {
  * 于是"读不懂就播样本"这条路径在结构上就不存在。
  */
 function playSource(res, closePanel = true) {
+  disconnectLive();
   /* 新的一路数据即将开播：先把上一轮的红条摘掉，免得"没在播"和"在播"并存 */
   clearLoadError();
   const bits = [`${res.meta.tools} 次工具调用`];
@@ -1328,16 +1382,19 @@ function ingestWire(data) {
   try {
     ev = JSON.parse(String(data));
   } catch {
+    wireIssues++;
     return { ok: false, message: '收到一条不是 JSON 的事件（已跳过，未计数）' };
   }
   const r = normalize(ev);
   if (!r.ok) {
+    wireIssues++;
     return {
       ok: false,
       message: `拒收一条事件（${r.errors.map((i) => i.code).join('/')}）`,
       errors: r.errors,
     };
   }
+  if (r.unknownKind) wireIssues++;
   return { ok: true, event: r.event, unknownKind: r.unknownKind };
 }
 
@@ -1404,7 +1461,13 @@ let liveSeen = 0;
 function onLiveEvent(ev) {
   liveSeen++;
   if (liveSeen === 1) showSource(`HTTP 钩子 · ${sourceLabel}\n已收到事件，实时播放中`);
-  feed(ev);
+  if (paused) {
+    if (!liveBuffer.enqueue(ev)) {
+      disconnectLive();
+      connection = 'error';
+      showSource('暂停缓冲已满，已断开。请重新连接会话；未静默丢弃事件。', true);
+    }
+  } else feed(ev);
   if (ev.kind === KIND.TURN_END && director.turnDone) {
     showSource(`HTTP 钩子 · ${sourceLabel}\n本轮已收尾（turn_end ok:${ev.ok}）· 共 ${liveSeen} 条事件`);
   }
@@ -1454,7 +1517,10 @@ function connectHook(url) {
     return;
   }
 
-  if (liveSource && typeof liveSource.close === 'function') liveSource.close();
+  disconnectLive();
+  liveBuffer.reset();
+  connection = 'connecting';
+  let initialized = false;
   liveSeen = 0;
   sourceLabel = stream.toString();
   EVENTS = [];
@@ -1470,22 +1536,41 @@ function connectHook(url) {
    */
   liveSource = new EventSource(sourceLabel);
   liveSource.onopen = () => {
+    connection = 'online';
     hookState.classList.add('on');
     hookState.textContent = `已连接 ${sourceLabel}（SSE）· 事件到达即播放`;
     if (startPanel) startPanel.classList.add('hidden');
     if (hud) hud.classList.add('on');
-    startFrom({ events: [], meta: META, label: sourceLabel, live: true });
+    if (!initialized) {
+      startFrom({ events: [], meta: META, label: sourceLabel, live: true });
+      initialized = true;
+      showSource('实时事件源已连接 · 等待下一次工具调用');
+    }
   };
   liveSource.onmessage = (e) => {
+    let raw;
+    try { raw = JSON.parse(e.data); } catch { /* ingestWire reports the error */ }
+    if (raw) {
+      const accepted = liveBuffer.accept(raw);
+      if (!accepted.accepted) return;
+      if (accepted.changed) {
+        liveSeen = 0;
+        startFrom({ events: [], meta: META, label: sourceLabel, live: true });
+        showSource('事件源已切换 · 等待新会话的工具调用');
+      }
+    }
     const r = ingestWire(e.data);
     if (!r.ok) {
       hookState.classList.remove('on');
       hookState.textContent = r.message;
+      showSource(r.message, true);
       return;
     }
+    if (r.unknownKind) showSource(`收到未知事件类型：${r.unknownKind}，未作为工具调用执行`, true);
     onLiveEvent(r.event);
   };
   liveSource.onerror = () => {
+    connection = 'reconnecting';
     hookState.classList.remove('on');
     hookState.textContent =
       `连不上 ${sourceLabel}。\n`
@@ -1525,6 +1610,18 @@ function connectHook(url) {
       showSource('HTTP 钩子未连接 · 战场为空，未伪造任何进度', true);
     }
   };
+  liveSource.addEventListener?.('gap', () => {
+    disconnectLive();
+    connection = 'error';
+    showSource('断线超出恢复窗口，事件可能不完整。请重新连接当前会话。', true);
+  });
+}
+
+function disconnectLive() {
+  if (liveSource && typeof liveSource.close === 'function') liveSource.close();
+  liveSource = null;
+  liveBuffer.pending.length = 0;
+  connection = 'idle';
 }
 
 /**
@@ -1552,6 +1649,8 @@ function bindHook() {
 
 /** 一键演示：不传数据，直接播仓库自带的真实样本战斗 */
 function startSampleDemo() {
+  if (realSrc.error) { reportLoadError(realSrc.error, '样本文件'); return; }
+  disconnectLive();
   /* 样本也是一个"新的播放入口"：先摘掉上一轮的失败红条，再开始播 */
   clearLoadError();
   if (startPanel) startPanel.classList.add('hidden');
@@ -1614,6 +1713,8 @@ function boot() {
  * 指针锁定会吞掉鼠标点击，所以开始按钮之外必须有键盘入口。
  */
 window.addEventListener('keydown', (e) => {
+  const tag = e.target?.tagName;
+  if (['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON', 'SUMMARY'].includes(tag) || e.target?.isContentEditable) return;
   if (e.code === 'Space') {
     e.preventDefault();
     if (startPanel && !startPanel.classList.contains('hidden')) {
@@ -1639,6 +1740,7 @@ window.addEventListener('keydown', (e) => {
     showToast(inspectManual ? COPY.toast.inspectOn : COPY.toast.inspectOff);
   }
   if (e.code === 'KeyR') {
+    if (liveMode) { showToast('实况不可重播；可切换到样本或文件回放'); return; }
     startDemo();
     if (hud) hud.classList.add('on');
     showToast(COPY.toast.replay);
@@ -1670,6 +1772,15 @@ window.addEventListener('keydown', (e) => {
 /* ---------------- 调试口 ---------------- */
 
 window.__shield = {
+  workspace: () => ({ connection, live: liveMode, playing, paused,
+    dodging: flight.dodging,
+    pilot: { hp: flight.hp, maxHp: flight.maxHp, hit: flight.time < flight.invulnerableUntil },
+    wireIssues,
+    pending: liveBuffer.pending.length, activityVersion,
+    activity: [...activity.values()].reverse(), actualDuration, durationSamples,
+    fps, stats: director.stats(clockNow()), label: sourceLabel, meta: { ...META } }),
+  disconnect: () => disconnectLive(),
+  motion: (reduced) => { FX.shake = !reduced; FX.flash = !reduced; FX.numbers = !reduced; if (reduced) shake = 0; },
   /** 喂事件 */
   emit: (ev) => feed(ev),
   /** 状态快照 */
@@ -1869,3 +1980,7 @@ window.__shield = {
 };
 
 boot();
+if (inBrowser) {
+  const { mountWorkspace } = await import('./workspace.mjs');
+  mountWorkspace(window.__shield);
+}

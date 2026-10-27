@@ -447,7 +447,8 @@ section('挥击次数是真数出来的');
 {
   const d = fresh();
   const now = 6000;
-  d.handle({ kind: 'tool', tool: 'read_file' }, now);
+  const target = d.handle({ kind: 'tool', tool: 'read_file' }, now);
+  target.x = 20; target.y = 0;
 
   // 推进 1 秒：按 swingsPerSecond 应该约这么多次
   const r = run(d, 1.0, now);
@@ -469,7 +470,7 @@ section('挥击次数是真数出来的');
    */
   const d2 = fresh();
   const r2 = run(d2, 2.0, now);
-  ok('没敌人时仍在挥击（动作真实）', r2.swings > 0, `${r2.swings} 次`);
+  ok('没敌人时待命，不虚增开火次数', r2.swings === 0, `${r2.swings} 次`);
   ok('没敌人时伤害为 0（打空气）', d2.damage === 0, `damage=${d2.damage}`);
 
   /*
@@ -1836,13 +1837,13 @@ section('出生显形：不是预警，只是不让它凭空弹出');
    * 会因为 -1 参与比较而意外为真或意外为假，两种都不对。
    */
   const ringCount = countOf(renderSrc, 'ctx.arc(e.x, e.y + h * 0.30');
-  const shadowCount = countOf(renderSrc, 'dying ? alpha * 0.55 : 0.39');
+  const shadowCount = countOf(renderSrc, 'ctx.arc(e.x,e.y,Math.max(w,h)*.65');
   const iRing = ringCount === 1 ? renderSrc.indexOf('ctx.arc(e.x, e.y + h * 0.30') : -1;
-  const iShadow = shadowCount === 1 ? renderSrc.indexOf('dying ? alpha * 0.55 : 0.39') : -1;
-  ok('出生环与影子调用点各自唯一（位置比较的前提）',
+  const iShadow = shadowCount === 1 ? renderSrc.indexOf('ctx.arc(e.x,e.y,Math.max(w,h)*.65') : -1;
+  ok('出生环与轨道签名各自唯一（位置比较的前提）',
      ringCount === 1 && shadowCount === 1,
      `环命中 ${ringCount} 次 / 影子命中 ${shadowCount} 次`);
-  ok('出生环画在影子之前（贴地，不被影子盖）',
+  ok('出生环画在轨道签名之前（装饰层不遮挡舰体）',
      iRing > 0 && iShadow > 0 && iRing < iShadow,
      `环=${iRing} 影子调用点=${iShadow}`);
 }
@@ -2454,10 +2455,10 @@ section('视口变换：圆心恒等于画布中心（任意 scale / dpr）');
        && /ctx\.setTransform\(vt\.a, 0, 0, vt\.d, vt\.e, vt\.f\)/.test(code),
        'setTransform 必须接到纯函数上，不能另写一份');
     /* 旋转仍绕**画布中心**（逻辑像素），这条旧约束不能被顺手改坏 */
-    ok('震屏旋转仍绕画布中心（translate/rotate/translate 三段式）',
-       /ctx\.translate\(this\.vw \/ 2, this\.vh \/ 2\)/.test(code)
-       && /ctx\.rotate\(sh\.a\)/.test(code)
-       && /ctx\.translate\(-this\.vw \/ 2, -this\.vh \/ 2\)/.test(code));
+    ok('震屏绕已平移到画布中心的世界原点旋转（不重复平移）',
+       /ctx\.rotate\(sh\.a\)/.test(code)
+       && !/ctx\.translate\(this\.vw \/ 2, this\.vh \/ 2\)/.test(code)
+       && !/ctx\.translate\(-this\.vw \/ 2, -this\.vh \/ 2\)/.test(code));
   }
 }
 
@@ -3586,6 +3587,9 @@ section('产品外壳：一键演示 / 拖入文件 / HTTP 钩子');
       { name: 'bad-text.txt', text: 'this is not json\nnor jsonl\n', tag: '纯文本' },
       { name: 'empty.json', text: '', tag: '空文件' },
       { name: 'bad-events.json', text: '[{"kind":"tool"}]', tag: '缺 ts 的事件' },
+      { name: 'orphan.json', text: '[{"kind":"tool","tool":"read","id":"unclosed","ts":10}]', tag: '没有结束的调用' },
+      { name: 'unknown.json', text: '[{"kind":"surprise","ts":10}]', tag: '未知事件类型' },
+      { name: 'bad-line.jsonl', text: '{"kind":"tool","tool":"read","id":"a","ts":10}\nbroken\n{"kind":"tool_end","tool":"read","id":"a","ok":true,"ts":20}\n', tag: '含坏行的事件文件' },
     ];
     for (const c of badCases) {
       const r = shield.loadText(c.text, c.name);

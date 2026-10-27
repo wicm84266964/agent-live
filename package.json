@@ -1,10 +1,11 @@
 {
   "name": "agent-live",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "实况智能体：把智能体跑任务的过程变成一场可观看的星海防线实况战斗 —— 真实事件驱动，绝不伪造进度",
   "type": "module",
   "private": true,
   "scripts": {
+    "start": "node tools/app-server.mjs",
     "build": "node build-events.mjs",
     "verify": "node verify.mjs",
     "refs": "node _refs.mjs",
@@ -12,6 +13,7 @@
     "test": "node --test \"tests/**/*.test.mjs\"",
     "doctor": "node tools/doctor.mjs",
     "hook": "node tools/http-server.mjs",
+    "codex-live": "node tools/codex-live.mjs",
     "demo": "node -e \"const http=require('node:http'),fs=require('node:fs');const P=Number(process.env.PORT)||5173,HP=Number(process.env.HOOK_PORT)||8787;const T={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.js':'text/javascript; charset=utf-8','.json':'application/json; charset=utf-8','.jsonl':'application/x-ndjson; charset=utf-8'};const say=(p)=>{console.log('');console.log('  实况智能体 agent-live · demo');console.log('  打开   http://127.0.0.1:'+p+'/');console.log('');console.log('  · 点「进入战场」= 一键演示，播仓库自带的真实样本战斗（292 次工具调用）');console.log('  · 拖入 session-analysis.json / real-events.json / .jsonl = 播你自己的战斗');console.log('  · 实时看自己的智能体：另一个窗口跑 npm run hook，本页钩子地址填');console.log('    http://127.0.0.1:'+p+'（本服务会转发到钩子的 '+HP+' 端口，因此没有跨源问题）');console.log('');console.log('  Ctrl+C 结束');console.log('')};const srv=http.createServer((q,s)=>{const u=new URL(String(q.url||'/'),'http://127.0.0.1');const path=u.pathname;if(path==='/event'||path==='/events'||path==='/stats'||path==='/health'){const up=http.request({host:'127.0.0.1',port:HP,path:q.url,method:q.method,headers:{...q.headers,host:'127.0.0.1:'+HP}},r=>{s.writeHead(r.statusCode||502,r.statusCode===200&&path==='/events'?{...r.headers,'cache-control':'no-cache, no-transform'}:r.headers);r.pipe(s)});up.on('error',()=>{if(s.headersSent)return s.end();s.writeHead(502,{'content-type':'application/json; charset=utf-8'});s.end(JSON.stringify({ok:false,error:'钩子没起来：先跑 npm run hook（默认 8787），再回来连'}))});q.pipe(up);return}const f=path==='/'?'/index.html':path;if(f.includes('..')){s.writeHead(403);return s.end('403')}let b;try{b=fs.readFileSync('.'+f)}catch{s.writeHead(404,{'content-type':'text/plain; charset=utf-8'});return s.end('404 '+f)}s.writeHead(200,{'content-type':T[f.slice(f.lastIndexOf('.'))]||'application/octet-stream','cache-control':'no-store'});s.end(b)});srv.listen(P,'127.0.0.1',()=>say(P))\"",
     "serve": "python -m http.server 5173 --bind 127.0.0.1"
   },

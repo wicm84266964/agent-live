@@ -30,6 +30,8 @@ desktop.ini
 # 本地生成的临时文件
 *.log
 tmp/
+codex-events.jsonl
+tmp-live-proof.png
 
 # 构建/覆盖率残留（本项目零构建，加上以防万一）
 dist/

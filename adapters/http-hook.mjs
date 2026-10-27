@@ -26,6 +26,7 @@
  * - 慢客户端：写失败就踢掉，不让一个死连接拖垮整个服务。
  */
 import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { createInbox, normalize, formatIssues } from '../protocol/events.mjs';
 
 /** 唯一允许的监听地址。刻意不做成参数。 */
@@ -58,7 +59,8 @@ const MAX_BODY_BYTES = 1024 * 1024;
  * }>}
  */
 export async function startHttpHook(opts = {}) {
-  const inbox = createInbox();
+  let inbox = createInbox();
+  let streamId = randomUUID();
   const now = typeof opts.now === 'function' ? opts.now : Date.now;
   const replay = Number.isInteger(opts.replay) ? opts.replay : DEFAULT_REPLAY;
   const onEvent = typeof opts.onEvent === 'function' ? opts.onEvent : () => {};
@@ -80,7 +82,7 @@ export async function startHttpHook(opts = {}) {
       return { ok: false, event: null, issues: r.issues, unknownKind: result.unknownKind };
     }
 
-    const ev = { ...r.event };
+    const ev = { ...r.event, streamId };
     /* seq 只是传输层序号，不属于协议字段；契约里可选、消费方可忽略 */
     if (ev.seq == null) ev.seq = nextSeq++;
     else nextSeq = Math.max(nextSeq, Number(ev.seq) + 1 || nextSeq);
@@ -93,7 +95,7 @@ export async function startHttpHook(opts = {}) {
   }
 
   function broadcast(ev, meta) {
-    const payload = `id: ${ev.seq ?? ''}\ndata: ${JSON.stringify(ev)}\n\n`;
+    const payload = `id: ${streamId}:${ev.seq ?? ''}\ndata: ${JSON.stringify(ev)}\n\n`;
     for (const res of [...clients]) {
       try {
         res.write(payload);
@@ -243,9 +245,17 @@ export async function startHttpHook(opts = {}) {
       } catch {
         /* ignore */
       }
+      const cursor = String(req.headers['last-event-id'] || '');
+      const split = cursor.lastIndexOf(':');
+      const sameStream = split > 0 && cursor.slice(0, split) === streamId;
+      const after = sameStream ? Number(cursor.slice(split + 1)) : 0;
+      if (sameStream && buffer.length && after < buffer[0].seq - 1) {
+        res.write(`event: gap\ndata: ${JSON.stringify({ message: '断线时间过长，部分事件已超出恢复窗口，请重新连接会话' })}\n\n`);
+      }
       for (const ev of buffer) {
+        if (sameStream && ev.seq <= after) continue;
         try {
-          res.write(`id: ${ev.seq ?? ''}\ndata: ${JSON.stringify(ev)}\n\n`);
+          res.write(`id: ${streamId}:${ev.seq ?? ''}\ndata: ${JSON.stringify(ev)}\n\n`);
         } catch {
           break;
         }
@@ -325,7 +335,15 @@ export async function startHttpHook(opts = {}) {
     url: `http://${LISTEN_HOST}:${port}`,
     port,
     host: LISTEN_HOST,
-    inbox,
+    get inbox() { return inbox; },
+    reset() {
+      buffer.length = 0;
+      inbox = createInbox();
+      nextSeq = 1;
+      streamId = randomUUID();
+      for (const res of clients) res.end();
+      clients.clear();
+    },
     recent: () => buffer.slice(),
     stats: () => inbox.snapshot(),
     push,
