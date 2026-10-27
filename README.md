@@ -2,20 +2,12 @@
 
 English overview: [README.en.md](README.en.md).
 
-> 把智能体跑任务的过程，变成一场可观看的星海防线实况战斗 —— 等待不再无聊。
-> **真实事件驱动，绝不伪造进度。**
+## 安装：把下面整段粘给你的智能体
 
-零依赖、零构建。纯 ES module + Canvas 2D。`npm install` 不需要，仓库里没有依赖。
-
----
-
-## 把下面这段提示词粘给你的智能体
-
-> 复制下面代码块里的**全部内容**，整段发给你的智能体（Claude Code / Codex / Cursor / 自研 agent 都行）。
-> 它不依赖你和它的任何聊天上下文，自身就是一份完整工单。
+这是安装。不要先自己找日志、改端口、猜 profile。把下面代码块里的**全部内容**复制给你的智能体（Codex / Claude Code / Cursor / 自研 agent 都行）。它不依赖聊天上下文，自身就是一份完整工单，包括 Codex 会话卷该用哪个 profile、怎样导出成页面能拖进去的文件。
 
 ```
-任务：把我的日志/事件流接进「实况智能体」(agent-live)，让它能实时看着我的工具调用打一场
+任务：把我的日志/事件流接进「实况智能体」(agent-live)，让它能看着我的工具调用打一场
 星海防线实况战斗。项目根目录 = 本仓库根目录（含 package.json，name 必须是 "agent-live"）。
 零依赖、零构建：不要 npm install，不要引入任何打包工具。
 
@@ -29,19 +21,42 @@ English overview: [README.en.md](README.en.md).
    如果这两条不成立，停下来报告，不要继续。
 2) 找到我这份智能体自己的日志/转录文件（或事件流）。必须先亲眼看一遍它的**真实格式**。
 
-【二、三路接入，选一条（推荐文件通道起步）】
-A. 本地文件（最省事，支持增量 tail）
-     npm run doctor -- --file <我的日志路径>
-     加 --profile 做字段映射（模板见 adapters/profiles/*.json）：
-     npm run doctor -- --file <路径> --profile <profile名或profile文件路径>
-B. 管道 stdin（智能体能往 stdout 吐 JSONL 时最合适）
+【二、先按我正在用的智能体选 profile，再跑 doctor】
+先看真实日志的前几行，再选下面一条。不要凭名字猜。
+
+Codex 会话卷（最常见。文件在 %USERPROFILE%\.codex\sessions\ 或 ~/.codex/sessions/ 下，
+文件名通常是 rollout-*.jsonl，里面有 "type":"event_msg" 和 "item_completed"）：
+     npm run doctor -- --file "<那份 jsonl 的绝对路径>" --profile codex-session --out codex-events.jsonl
+  - 必须用 codex-session。--profile codex 是给 `codex exec --json` 的 item.started /
+    item.completed 用的，那条只在合成夹具上验证过，不要拿去套会话卷。
+  - exit 0 才会写出 codex-events.jsonl。exit 不是 0 就不要自己编一份播放文件。
+  - 写成功后跑 npm run demo，把打印出的本机地址告诉我，并说明把 codex-events.jsonl 拖进页面。
+  - 不要把原始会话卷直接拖进页面。页面不读 Codex 原始字段。
+  - 不要把原始会话卷 tail 进 npm run hook。钩子不套 profile，原始行不会变成战斗。
+  - codex-session 只投影带 exit_code 或 status=completed|failed 的
+    CommandExecution / McpToolCall / FileChange。没有这些字段的记录会跳过并计数。
+    这是如实跳过，不要补成功。
+
+Claude Code 转录（~/.claude/projects/ 或 %USERPROFILE%\.claude\projects\ 下的 .jsonl，
+工具块嵌在 message.content[] 里）：
+     npm run doctor -- --file "<转录路径>" --profile claude-code --out claude-events.jsonl
+  doctor 会先把 message.content[] 摊平。exit 0 后再 npm run demo，拖入写出的 jsonl。
+
+Cursor：profile 名是 cursor，仅合成夹具验证过。先看真实日志再决定能不能用，
+不要把它当成已经接好。
+
+自研 / 已经是协议形状的 JSONL：不要加 --profile。
+     npm run doctor -- --file "<路径>" --out play.jsonl
+
+另外两条通道，文件通道走不通时再用：
+B. 管道 stdin
      <我的智能体命令> | node tools/doctor.mjs --stdin
      或： <我的智能体命令> | node tools/doctor.mjs --stdin --profile <名字>
-C. HTTP hook（要"边跑边看"就用这条）
-     npm run hook                                  # 起钩子，默认 127.0.0.1:8787
-     # 我的每一条事件：
+C. HTTP hook（只接收已经是协议形状的事件，不负责翻译 Codex/Claude 原始日志）
+     npm run hook
      curl -X POST http://127.0.0.1:8787/event -H "content-type: application/json" -d "<事件JSON>"
-     # 然后另开窗口起页面：npm run demo ，页面里钩子地址填 http://127.0.0.1:5173
+     另开窗口：npm run demo
+     页面若从 npm run demo 打开，钩子地址用页面自己的来源（默认 http://127.0.0.1:5173），不要填 8787。
 
 【三、事件必须是这个形状（不要发明字段）】
    {"kind":"tool",     "tool":"<工具原始名>", "id":"<调用唯一ID>", "ts":<毫秒时间戳>}
@@ -73,7 +88,7 @@ C. HTTP hook（要"边跑边看"就用这条）
 【六、卡住了看这两份文档（不要凭猜测改字段）】
    docs/PROTOCOL.md    —— 字段表、约束、id 配对规则、诚实语义红线
    docs/ADAPTERS.md    —— 三路通道的细节、映射层配置格式、逐家接入手册
-   adapters/profiles/*.json —— 字段映射模板（claude-code / codex / cursor），照抄改路径
+   adapters/profiles/*.json —— 字段映射模板（claude-code / codex-session / codex / cursor）
    注意：Cursor 的 profile 仅合成夹具验证过。claude-code 与 codex-session
    各对照过一份本机转录（doctor exit 0，id 配对完美），这不是对所有版本的保证。
    用它们之前先拿你自己的真实转录跑 doctor 验证，别假定它一定能用。
@@ -81,7 +96,8 @@ C. HTTP hook（要"边跑边看"就用这条）
    跳过映射层，出错面最小。
 
 【七、交付时报告】
-   - 用了哪条通道（A / B / C），用什么命令跑的
+   - 用了哪条（codex-session / claude-code / cursor / 协议文件 / stdin / HTTP hook），用什么命令跑的
+   - 如果写了 --out：写出的文件路径，以及我该拖进页面的是这份文件，不是原始日志
    - doctor 的退出码，以及关键几行（事件数 / 分类型 / id 配对率 / 未知 kind）
    - 如果没接成：卡在哪一步、doctor 说了什么、下一步需要我提供什么
 ```

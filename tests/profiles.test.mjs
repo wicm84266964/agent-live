@@ -5,6 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -182,6 +183,44 @@ test('doctor --profile codex-session 投影后 exit 0', async () => {
     assert.match(r.stdout, /id 配对\s+1\/1/);
     assert.match(r.stdout, /预处理\s+codex-session/);
     assert.equal(r.stdout.includes('leak'), false);
+  });
+});
+
+test('doctor --out 只在 exit 0 时写出页面可拖入的 JSONL', async () => {
+  await withTempDir(async (dir) => {
+    const src = join(dir, 'rollout.jsonl');
+    const out = join(dir, 'codex-events.jsonl');
+    const badOut = join(dir, 'should-not-exist.jsonl');
+    await writeFile(src, JSON.stringify({
+      timestamp: '2026-10-27T00:00:01.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'item_completed',
+        item: {
+          type: 'CommandExecution',
+          id: 'exec-out',
+          status: 'completed',
+          exit_code: 0,
+          duration: { secs: 1, nanos: 0 },
+          command: 'do-not-copy',
+        },
+      },
+    }) + '\n', 'utf8');
+    const ok = await runDoctor(['--file', src, '--profile', 'codex-session', '--out', out]);
+    assert.equal(ok.code, 0, ok.stdout + ok.stderr);
+    assert.match(ok.stdout, /已写出/);
+    const lines = readFileSync(out, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    assert.equal(lines[0].kind, 'tool');
+    assert.equal(lines[1].kind, 'tool_end');
+    assert.equal(lines[1].ok, true);
+    assert.equal(JSON.stringify(lines).includes('do-not-copy'), false);
+
+    const bad = await runDoctor([
+      '--file', src, '--profile', 'cursor', '--out', badOut,
+    ]);
+    assert.notEqual(bad.code, 0);
+    assert.equal(existsSync(badOut), false);
+    assert.match(bad.stderr, /不写出/);
   });
 });
 

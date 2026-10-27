@@ -31,7 +31,7 @@
  *   1  数据有问题（配对漏了、未知 kind、坏记录、重复上报……）
  *   2  用法错误 / 输入源根本打不开
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
@@ -64,6 +64,8 @@ const USAGE = `
   --strict                把 warn 也当失败（缺 id 之类）
   --json                  输出机器可读 JSON
   --quiet                 只打结论行
+  --out <path>            仅在 exit 0 时把协议事件写成 JSONL，供页面拖入播放
+                          自检失败不写文件，避免把没接上的流拿去演
 
 示例：
   node tools/doctor.mjs --file real-events.json
@@ -100,6 +102,7 @@ function parseArgs(argv) {
     json: false,
     quiet: false,
     help: false,
+    out: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -112,6 +115,7 @@ function parseArgs(argv) {
       case '--strict': out.strict = true; break;
       case '--json': out.json = true; break;
       case '--quiet': out.quiet = true; break;
+      case '--out': out.out = need(argv, ++i, a); break;
       case '-h': case '--help': out.help = true; break;
       default:
         if (a.startsWith('--')) {
@@ -470,13 +474,35 @@ async function main() {
     fileIssues: fileIssues.slice(0, 20).map((i) => `${i.code}: ${i.message}`),
   };
 
+  const written = writePlayback(exitCode, collected);
+  if (written) report.playbackFile = written;
+
   if (args.json) {
     process.stdout.write(JSON.stringify(report, null, 2) + '\n');
     process.exit(exitCode);
   }
 
   printReport(report, inboxSnap);
+  if (written) process.stdout.write(`  已写出      ${written}（${collected.length} 条协议事件，拖进页面即可播）\n`);
   process.exit(exitCode);
+}
+
+/**
+ * 只在自检通过时写出播放文件。
+ * 失败仍写出，会让人把没接上的流拖进页面，看起来像接上了。
+ */
+function writePlayback(exitCode, events) {
+  if (!args.out) return null;
+  if (exitCode !== 0) {
+    process.stderr.write(
+      `[doctor] 不写出 ${args.out}：自检未通过（exit ${exitCode}）。失败的事件流不能拿去播放。\n`,
+    );
+    return null;
+  }
+  const list = Array.isArray(events) ? events : [];
+  const body = list.map((e) => JSON.stringify(e)).join('\n') + (list.length ? '\n' : '');
+  writeFileSync(args.out, body);
+  return resolve(args.out);
 }
 
 function countKinds(events) {

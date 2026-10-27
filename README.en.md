@@ -2,6 +2,45 @@
 
 [中文说明](README.md)
 
+## Install: paste this whole block to your agent
+
+Do not hunt for logs or guess a profile yourself. Copy the block below to Codex, Claude Code, Cursor, or your own agent. It is a complete ticket, including which Codex profile to use and how to export a file the page can play.
+
+```
+Task: connect my agent log to agent-live in this repository (package.json name must be "agent-live").
+Do not npm install. Do not add a bundler.
+
+1) From the repository root, run:
+     node -e "console.log(require('./package.json').name)"
+     npm run check
+   Both must succeed. If they do not, stop and report. Do not continue.
+
+2) Look at my real log before choosing a profile.
+
+Codex session rollout (usual case). Files live in %USERPROFILE%\.codex\sessions\ or ~/.codex/sessions/, usually rollout-*.jsonl, with "type":"event_msg" and "item_completed":
+     npm run doctor -- --file "<absolute path>" --profile codex-session --out codex-events.jsonl
+   Use codex-session. Do not use --profile codex for a session rollout. That profile is for `codex exec --json` and is fixture-checked only.
+   --out writes the file only when doctor exits 0. If it does not exit 0, do not invent a playback file.
+   Then run npm run demo and tell me to drop codex-events.jsonl onto the page.
+   Do not drop the raw session file. The page does not read Codex fields.
+   Do not tail the raw session into npm run hook. The hook does not apply a profile.
+   Records without exit_code or status=completed|failed are skipped. Do not fill in success.
+
+Claude Code transcript under ~/.claude/projects/ or %USERPROFILE%\.claude\projects\:
+     npm run doctor -- --file "<path>" --profile claude-code --out claude-events.jsonl
+   doctor flattens message.content[] first. After exit 0, npm run demo and drop the written jsonl.
+
+Cursor profile name is cursor. It is fixture-checked only. Do not treat it as connected until doctor exits 0 on my real log.
+
+Already-protocol JSONL: no --profile.
+     npm run doctor -- --file "<path>" --out play.jsonl
+
+Exit codes: 0 accepted, 1 the stream is semantically wrong, 2 the source cannot be opened or the arguments are wrong.
+If you cannot find any tool call, stop and say so. Do not invent events. Do not guess fields.
+
+Report the command, the doctor exit code, the pairing line, and the playback file path if you wrote one.
+```
+
 Watch an agent work as a live battle. Each tool call is an enemy. The defender keeps attacking. The enemy dies only when that call actually finishes.
 
 Zero dependencies. No build step. Node.js 18 or newer.

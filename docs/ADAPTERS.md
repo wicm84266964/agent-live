@@ -300,8 +300,11 @@ node tools/doctor.mjs --file events.jsonl --profile codex
 会话卷 `~/.codex/sessions/**/rollout-*.jsonl`：
 
 ```bash
-node tools/doctor.mjs --file rollout.jsonl --profile codex-session
+node tools/doctor.mjs --file rollout.jsonl --profile codex-session --out codex-events.jsonl
 ```
+
+exit 0 才会写出 `codex-events.jsonl`。把这个文件拖进 `npm run demo` 打开的页面。
+不要拖原始会话卷，也不要把它 tail 进 `npm run hook`：钩子不套 profile。
 
 只投影带显式成败的 `item_completed`：`CommandExecution`（`exit_code`）、
 `McpToolCall` / `FileChange`（`status` 为 `completed` 或 `failed`）。
