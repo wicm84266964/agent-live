@@ -1,0 +1,13 @@
+{
+  "profile": "codex-session",
+  "source": "OpenAI Codex CLI session rollout JSONL (~/.codex/sessions)",
+  "preprocess": "codex-session",
+  "notes": "会话卷里的完成记录是 event_msg/item_completed。CommandExecution 用 exit_code，McpToolCall 与 FileChange 用 status=completed|failed。没有这两类显式字段的记录（例如 ImageView）跳过并计数。开始时刻 = 完成时刻 - duration.secs/nanos。不读取 command、cwd、arguments、result 正文。codex exec --json 的 item.started/item.completed 仍用 profile codex。",
+  "start": { "type": ["__codex_session_projected__"] },
+  "end": { "type": ["__codex_session_projected_end__"] },
+  "turnEnd": { "type": ["task_complete"] },
+  "id": ["payload.item.id"],
+  "tool": ["payload.item.tool", "payload.item.type"],
+  "ts": ["timestamp"],
+  "realMs": ["payload.item.duration"]
+}

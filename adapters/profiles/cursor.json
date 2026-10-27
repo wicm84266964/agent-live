@@ -1,0 +1,14 @@
+{
+  "profile": "cursor",
+  "source": "Cursor agent log (JSONL，event 字段区分阶段)",
+  "notes": "只在合成夹具上验证过，没有对真实 Cursor 转录验证过。不要把它读成已支持 Cursor。",
+  "envelope": { "event": ["session_start", "session_end", "meta"] },
+  "start": { "event": ["start", "tool_start", "tool_use"] },
+  "end": { "event": ["end", "tool_end", "tool_result"] },
+  "turnEnd": { "event": ["turn_end", "done"] },
+  "id": ["callId", "call_id", "id"],
+  "tool": ["tool", "toolName", "name"],
+  "ts": ["ts", "timestamp", "time"],
+  "realMs": ["durationMs", "duration_ms", "ms"],
+  "ok": { "path": ["success", "ok"], "trueMeansFail": false }
+}

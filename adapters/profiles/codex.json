@@ -1,0 +1,15 @@
+{
+  "profile": "codex",
+  "source": "OpenAI Codex CLI event stream (JSONL)",
+  "notes": "Codex 的事件是 item.started / item.completed 信封形状，真正的工具调用藏在 item 里。start/end 用 'item.type' 之外的顶层 type 匹配，工具名从 item 里取。注意 Codex 的 item.completed 会同时用于推理/消息/命令，取不到工具名的那类会被如实跳过（missing-tool），不会被硬造。",
+  "envelope": { "type": ["session_configured", "turn_diff", "token_count", "error"] },
+  "start": { "type": ["item.started"] },
+  "end": { "type": ["item.completed"] },
+  "turnEnd": { "type": ["task_complete", "turn.completed"] },
+  "id": ["item.id", "item.call_id", "id", "call_id"],
+  "tool": ["item.tool_name", "item.name", "item.command", "tool_name", "name"],
+  "ts": ["timestamp", "ts", "time", "item.started_at"],
+  "realMs": ["item.duration_ms", "duration_ms", "durationMs"],
+  "ok": { "path": ["item.exit_code", "exit_code", "item.success", "success"], "zeroMeansOk": true, "trueMeansFail": false },
+  "extra": { "itemType": ["item.type"] }
+}

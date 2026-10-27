@@ -1,0 +1,16 @@
+{
+  "profile": "claude-code",
+  "source": "Claude Code transcript (JSONL)",
+  "preprocess": "claude-content",
+  "notes": "doctor --profile claude-code 会先把 message.content[] 摊平，再按本配置映射。is_error 缺省按本 profile 的 absent=success 记为成功，并在 doctor 里单列计数；is_error:true 仍是失败。这一条对照过一份本机转录的字段形状，不是对所有 Claude Code 版本的保证。Cursor 的 profile 仍只在合成夹具上验证过。",
+  "envelope": { "type": ["summary", "system", "session_meta", "request_header"] },
+  "start": { "type": ["tool_use"] },
+  "end": { "type": ["tool_result"] },
+  "turnEnd": { "type": ["turn_end", "result"] },
+  "id": ["id", "tool_use_id", "toolUseId", "callId"],
+  "tool": ["name", "tool_name", "toolName"],
+  "ts": ["timestamp", "ts", "time", "created_at"],
+  "realMs": ["duration_ms", "durationMs", "elapsed_ms"],
+  "ok": { "path": ["is_error", "isError"], "trueMeansFail": true, "absent": "success" },
+  "extra": { "sessionId": ["session_id", "sessionId"] }
+}

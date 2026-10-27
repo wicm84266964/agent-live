@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>实况智能体 · 星海防线</title>
+<!--
+  Favicon：内联 SVG data-URI。
+
+  ===== 为什么不是 favicon.ico =====
+  npm run demo / npm run serve 都是零依赖静态服务，没有 /favicon.ico
+  这个文件；浏览器会**每次加载**都去要一次，拿 404，于是控制台永远挂着
+  一条错误 —— "零 console 错误"这条验收项因此永远过不了。
+
+  ===== 为什么不用 .ico =====
+  .ico 是二进制格式，塞进文本仓库既不可 review 也不可 diff。
+  用 data-URI 的 SVG：一个文件都不用多，服务端零改动，
+  画什么也能直接在源码里读到。
+
+  图案 = 星海防线的品牌隐喻：深空底 + 一道弧形防线 + 中央的守位光点。
+  颜色与 shield.css 的变量同值（--bg / --gold / --cyan），
+  改主题时两处要一起改（这里不能写 var()：SVG data-URI 里没有 CSS 变量）。
+-->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='7'%20fill='%23070b16'/%3E%3Cpath%20d='M5%2022a11%2011%200%200%201%2022%200'%20fill='none'%20stroke='%232bd4d4'%20stroke-width='2.5'%20stroke-linecap='round'/%3E%3Cpath%20d='M9%2023a7%207%200%200%201%2014%200'%20fill='none'%20stroke='%23f2c14e'%20stroke-width='2'%20stroke-linecap='round'/%3E%3Ccircle%20cx='16'%20cy='10'%20r='2.6'%20fill='%23ffd76e'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="shield.css">
+</head>
+<body>
+
+<div id="stage">
+  <canvas id="cv"></canvas>
+
+  <!--
+    顶部 HUD，分两层。
+
+    运行态（默认）：只留三个能一眼读的数 —— 场上敌人、已击杀、当前连击。
+    检视态（按 I 或暂停）：展开完整明细（事件数、挥击、未映射、超时、fps…）。
+
+    这样做的理由：运行中人的注意力在战场，一堆数字只会互相干扰；
+    但分析用的数据不能丢，只是挪到"你想看的时候"。
+
+    唯一不能挪的是诚实字段（未映射 / 超时）：它们一旦非零就是
+    "有工具没被映射"或"有任务超了预估"，藏起来等于假报告。
+    所以它们在运行态保留一个警示角标，非零才出现。
+  -->
+  <div id=hud>
+    <div id="hudLine1">—</div>
+    <div id="hudCombo"></div>
+    <div id="hudWarn"></div>
+    <div id="hudDetail">—</div>
+  </div>
+
+  <!-- BOSS 模式的边框提示 -->
+  <div id="hudBoss"></div>
+
+  <!--
+    事件源状态条。
+    它存在的唯一理由是**诚实**：任何时候人都能看到"现在播的是哪份数据"。
+    载入失败时它变成红色错误条，并且**不会**偷偷回退到样本数据。
+  -->
+  <div id="sourceNote" class="note"></div>
+
+  <!-- 飘提示 -->
+  <div id="toast"></div>
+
+  <!--
+    开始面板 / 落地页。
+
+    注意这里**没有硬编码的业务文案**：标题、分级名、诚实声明全部是空壳，
+    由 main.mjs 的 applyPanelCopy() 从 theme.mjs 填进来。
+    这样换题材只需要改 theme.mjs 一个文件，HTML 不用动。
+    data-theme 的值就是 theme 里 copy 的槽位名。
+
+    三个入口的顺序就是推荐顺序：
+      1. 一键演示   —— 不传任何数据，直接播仓库自带的真实样本战斗
+      2. 拖入文件   —— 播你自己的会话（session-analysis.json / real-events.json / .jsonl）
+      3. 连接钩子   —— 智能体边跑边看（SSE 实时流）
+  -->
+  <div id="startPanel">
+    <h1 data-theme="panel-title">实况智能体</h1>
+    <p class="brand-en" data-theme="panel-en">agent-live</p>
+    <p class="sub" data-theme="panel-sub">智能体执行过程的实时战场</p>
+
+    <div class="entries">
+      <!-- 1. 一键演示 -->
+      <div class="entry">
+        <button id="startBtn" class="primary" data-theme="start-button">进入战场</button>
+        <span class="entry-hint">一键演示 · 不传数据也能播放真实样本战斗</span>
+      </div>
+
+      <!-- 2. 拖入分析文件 -->
+      <div class="entry">
+        <!--
+          tabindex="0"：拖放区本身不是可聚焦元素，键盘用户无法 Tab 进来
+          确认"这里能丢文件"。加上之后它参与 Tab 序，并且有 :focus-visible
+          的青色描边（见 shield.css 的键盘焦点一节）。
+          role/aria-label 让它被读屏念成"拖入分析文件区"而不是一个空 div；
+          真正的操作入口仍是里面的「选择文件…」按钮。
+        -->
+        <div id="dropZone" class="drop" tabindex="0" role="group"
+             aria-label="拖入分析文件区：焦点在此处可用回车选择文件">
+          <span class="drop-title">拖入分析文件</span>
+          <span class="drop-sub">
+            <code>session-analysis.json</code> · <code>real-events.json</code> · <code>.jsonl</code>
+          </span>
+          <button id="pickBtn" class="ghost" type="button">选择文件…</button>
+          <input id="filePick" type="file"
+                 accept=".json,.jsonl,application/json" hidden>
+          <span id="dropErr" class="drop-err"></span>
+        </div>
+      </div>
+
+      <!-- 3. 连接 HTTP hook -->
+      <div class="entry">
+        <div class="hook">
+          <span class="hook-title">连接 HTTP hook</span>
+          <span class="hook-sub">
+            先 <code>npm run hook</code>。地址会自动改成当前页面来源。
+          </span>
+          <div class="hook-row">
+            <input id="hookInput" type="text" spellcheck="false"
+                   placeholder="http://127.0.0.1:8787" value="http://127.0.0.1:8787">
+            <button id="hookBtn" class="ghost" type="button">连接</button>
+          </div>
+          <span id="hookState" class="hook-state"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="rules">
+      <div class="rule">
+        <span class="tag minion" data-theme="tag-minion">侦察机</span>
+        <span class="desc" data-theme="desc-minion"></span>
+      </div>
+      <div class="rule">
+        <span class="tag elite" data-theme="tag-elite">突击舰</span>
+        <span class="desc" data-theme="desc-elite"></span>
+      </div>
+      <div class="rule">
+        <span class="tag boss" data-theme="tag-boss">母舰</span>
+        <span class="desc" data-theme="desc-boss"></span>
+      </div>
+      <p class="rule-note">一个敌人 = 一次工具调用。出场是 <code>tool</code>，死亡只由 <code>tool_end</code> 结算。</p>
+    </div>
+
+    <p class="honest" data-theme="honest-death"></p>
+    <p class="honest honest-2" data-theme="honest-source"></p>
+    <p class="honest honest-3" data-theme="honest-time"></p>
+
+    <p class="keys" data-theme="keys-hint">空格 开始 / 暂停 · P 暂停 · R 重播</p>
+  </div>
+</div>
+
+<script type="module" src="main.mjs"></script>
+</body>
+</html>

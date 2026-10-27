@@ -1,0 +1,743 @@
+/*
+ * 像素风 UI。
+ *
+ * 规则和画布一致：不圆角、不渐变、不阴影模糊。
+ * 像素风里一旦出现抗锯齿的圆角，整体就"软"掉了。
+ * 用硬边框 + 单色块 + 等宽字体。
+ */
+
+/*
+ * ===== 配色集中处：只在这里改色 =====
+ *
+ * 题材是「星海防线」：深空蓝黑底 + 冷钢蓝我方 + 暖红敌方。
+ * 所有下面用到的颜色都必须走 var(--x)，不许再在规则里写裸色值 ——
+ * 否则换题材时必然会漏掉某一条（漏掉的那条通常是最不常看的那块 UI）。
+ *
+ * 和 theme.mjs 的 PALETTE 是同一套色：
+ *   画布里的点阵用 PALETTE，页面外壳用这里的 CSS 变量。
+ * 两边同时在用的色（金色、告警红）取值一致，避免"面板和战场不是一个世界"。
+ */
+:root {
+  /* ---- 文字 ---- */
+  --ink: #e6edf7;
+  --ink-dim: #93a3bd;
+  --ink-faint: #5d6b85;
+
+  /* ---- 深空底色阶 ---- */
+  --bg: #070b16;
+  --panel: #0d1424;
+  --panel-2: #141d33;
+  --line: #2a3a5c;
+
+  /* ---- 强调色 ---- */
+  --gold: #f2c14e;
+  --gold-hi: #ffd76e;
+  --gold-shadow: #8f6a12;
+  --cyan: #2bd4d4;
+  --red: #e0564a;
+  --green: #4fbf62;
+
+  /* ---- 三档品级色（和 theme 的 TIER_LABEL_COLORS 同源）---- */
+  --tier-minion: #9fc4e0;
+  --tier-elite: #c9a0e0;
+  --tier-boss: #ff8a6a;
+
+  /* ---- 半透明叠色（避免各处再算 rgba）---- */
+  --tier-minion-soft: rgba(159, 196, 224, .10);
+  --tier-elite-soft: rgba(201, 160, 224, .10);
+  --tier-boss-soft: rgba(255, 138, 106, .12);
+  --void-veil: rgba(4, 7, 14, .88);
+  --toast-bg: rgba(4, 8, 16, .86);
+  --divider: rgba(147, 163, 189, .16);
+  /* ---- 连击角标（暖金块 + 深色字）---- */
+  --combo-ink: #1b1409;
+  --combo-bg-a: #ffe066;
+  --combo-bg-b: #f0b429;
+
+  /* ---- 星云高光 ---- */
+  --nebula-cyan: rgba(43, 212, 212, .05);
+  --nebula-violet: rgba(201, 160, 224, .05);
+
+  --boss-ring: rgba(224, 86, 74, .55);
+  --boss-glow: rgba(224, 86, 74, .16);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  /*
+   * 深空底 + 两层极淡径向高光，模拟星云。
+   * 不用图片：零依赖，也不会因为缺图而变成一块死黑。
+   */
+  background:
+    radial-gradient(ellipse at 20% 12%, var(--nebula-cyan), transparent 55%),
+    radial-gradient(ellipse at 82% 88%, var(--nebula-violet), transparent 55%),
+    var(--bg);
+  color: var(--ink);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  overflow: hidden;
+}
+
+#stage {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  /*
+   * dvh 兜住移动端地址栏收放导致的高度跳变。
+   * 前一行保留 100vh 做老浏览器兜底 —— 不支持的浏览器会忽略后一行。
+   */
+  height: 100dvh;
+}
+
+/*
+ * 画布撑满，但实际尺寸由 JS 按 dpr 设置。
+ * image-rendering: pixelated 是关键 —— 浏览器放大时不做平滑插值。
+ */
+#cv {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* ---------------- HUD ---------------- */
+
+#hud {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ink);
+  pointer-events: none;
+  text-shadow: 0 2px 0 #000, 0 0 8px rgba(0,0,0,0.9);
+  opacity: 0;
+  transition: opacity .2s;
+}
+
+#hud.on { opacity: 1; }
+
+#hudLine1 { color: var(--ink); }
+
+/*
+ * 连击角标。
+ * 只在 combo >= 2 时由 JS 加 .on 显示 —— 连击 1 不算连击，
+ * 一直挂个"x1"只会让人以为有个连击系统在空转。
+ */
+#hudCombo {
+  display: inline-block;
+  margin-top: 2px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .06em;
+  color: var(--combo-ink);
+  background: linear-gradient(180deg, var(--combo-bg-a), var(--combo-bg-b));
+  box-shadow: 0 1px 0 rgba(0,0,0,.6);
+  opacity: 0;
+  transform: scale(.8);
+  transition: opacity .12s, transform .12s;
+}
+
+#hudCombo.on { opacity: 1; transform: scale(1); }
+
+/*
+ * 诚实字段警示。
+ * 未映射 / 超时非零时出现 —— 这两个数字不好看，
+ * 但项目规则是"藏起来就是假报告"，所以它们连运行态也不许隐藏。
+ */
+#hudWarn {
+  color: var(--tier-boss);
+  font-size: 11px;
+  font-weight: 700;
+}
+#hudWarn:empty { display: none; }
+
+/*
+ * 明细层：默认隐藏，检视态才展开。
+ * 用 max-height 而不是 display，避免显示瞬间的布局跳动。
+ */
+#hudDetail {
+  margin-top: 3px;
+  padding-top: 3px;
+  border-top: 1px solid var(--divider);
+  color: var(--ink-dim);
+  font-size: 11px;
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: max-height .22s, opacity .22s;
+}
+
+#hud.inspect #hudDetail {
+  max-height: 120px;
+  opacity: 1;
+}
+
+/*
+ * BOSS 在场时给屏幕一圈暗红边框。
+ * 用 inset box-shadow 而不是 border，避免挤压画布布局。
+ */
+#hudBoss {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .35s;
+  box-shadow: inset 0 0 0 3px var(--boss-ring),
+              inset 0 0 60px var(--boss-glow);
+}
+
+#hudBoss.on { opacity: 1; }
+
+/* ---------------- toast ---------------- */
+
+#toast {
+  position: absolute;
+  left: 50%;
+  bottom: 56px;
+  transform: translateX(-50%) translateY(6px);
+  padding: 6px 14px;
+  background: var(--toast-bg);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 12px;
+  letter-spacing: .04em;
+  opacity: 0;
+  transition: opacity .18s, transform .18s;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+#toast.on {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ---------------- 开始面板 ---------------- */
+
+#startPanel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /*
+   * ===== 为什么不是裸的 justify-content: center =====
+   *
+   * flex 居中 + 内容超高是 CSS 里一个经典陷阱：内容会从**上下两端**
+   * 同时溢出，而滚动容器只能滚到顶边 —— 上半截（品牌名、「进入战场」
+   * 按钮的上沿）永远抓不回来。
+   * 下面这组 800×600 的历史读数（内容约 681px、「实况智能体」跑到
+   * y≈-80、按钮上沿被切、scrollHeight 仍报 600）**没有落盘量测产物**，
+   * 是当时按 CSS 语义 + 截图推断的记录，本轮没有复测那几个数。
+   *
+   * 所以两件事一起做：
+   * 1. `safe center`：支持该关键字的浏览器在内容装不下时自动退化成
+   *    flex-start（前一行 center 做兜底，不能安全居中时才用普通居中）
+   * 2. max-height 受视口约束 + overflow-y:auto：真的装不下也能滚到
+   *    最上面那一行
+   * 另外 ≤700px 的压缩规则（见文件末尾的 @media）让 600px 视口
+   * 真的不溢出 —— **已量测** 800×600 = 600/600（溢出 0），
+   * 读数见 .lab-agent/evidence/panel-height-measurements.md；
+   * 滚动只是最后一道保险。
+   * 701–899px 走文件后部的 max-height: 899px 压缩档。
+   * 2026-10-27 Chrome headless 读 #startPanel：1280×720、1280×768、
+   * 800×600、900×700、1600×900 的 scrollHeight 都不大于 clientHeight。
+   */
+  justify-content: center;
+  justify-content: safe center;
+  gap: 14px;
+  background: var(--void-veil);
+  text-align: center;
+  /*
+   * 纵向 20px / 横向 24px（原来四边都是 24px）。
+   *
+   * 少这 8px 是为了 1600×900 这种"高度刚好 900"的窗口：
+   * 原来的四边 24px 多占 8px 纵向，右下角会凭空多出一条细滚动条。
+   * 已量测（.lab-agent/evidence/panel-height-measurements.md）：
+   *   1600×900  = 900 / 900（溢出 0）
+   *   1280×1000 = 1000 / 1000（溢出 0，居中显示、不出滚动条）
+   * 早期注释把 1600×900 写成"896 / 900（留 4px 余量）"，
+   * 与实测的 900/900 不符，已按读数改正。
+   * 横向不动：宽度方向的留白是观感的一部分，且和溢出的那个维度无关。
+   */
+  padding: 20px 24px;
+  max-height: 100vh;
+  max-height: 100dvh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+
+/*
+ * hidden 必须用 display:none。
+ * 之前踩过：只设 opacity 或 visibility，被 CSS 的 display:flex 覆盖，
+ * 面板一直挡着画面。
+ */
+#startPanel.hidden {
+  display: none;
+}
+
+#startPanel h1 {
+  font-size: 30px;
+  letter-spacing: .14em;
+  color: var(--gold);
+  text-shadow: 0 3px 0 #000, 0 0 22px var(--nebula-cyan);
+}
+
+#startPanel .sub {
+  font-size: 12px;
+  color: var(--ink-dim);
+  letter-spacing: .06em;
+  margin-top: -6px;
+}
+
+.rules {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 10px 0 4px;
+}
+
+.rule {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.tag {
+  display: inline-block;
+  min-width: 46px;
+  padding: 2px 7px;
+  font-size: 11px;
+  text-align: center;
+  border: 1px solid;
+  letter-spacing: .08em;
+}
+
+.tag.minion { color: var(--tier-minion); border-color: var(--tier-minion); background: var(--tier-minion-soft); }
+.tag.elite  { color: var(--tier-elite);  border-color: var(--tier-elite);  background: var(--tier-elite-soft); }
+.tag.boss   { color: var(--tier-boss);   border-color: var(--tier-boss);   background: var(--tier-boss-soft); }
+
+.rule .desc {
+  color: var(--ink-dim);
+  font-size: 11px;
+}
+
+/*
+ * 诚实声明区块。
+ * 这块不是装饰 —— 它写的就是程序的真实行为边界，
+ * 放在开始界面上是让看的人知道"血条空了不等于死"。
+ */
+.honest {
+  max-width: 440px;
+  margin-top: 8px;
+  padding: 10px 14px;
+  font-size: 11px;
+  line-height: 1.8;
+  color: var(--ink-dim);
+  border-left: 2px solid var(--line);
+  text-align: left;
+}
+
+.honest strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.honest code {
+  color: var(--gold);
+  font-size: 10.5px;
+}
+
+/*
+ * 几条诚实声明的间距与透明度。
+ *
+ * ===== 为什么从 index.html 的 inline style 挪到这里 =====
+ *
+ * 原来第二条 / 第三条写的是 `style="margin-top:10px"` 这种行内样式。
+ * 行内样式的优先级高于**任何**选择器（除非 !important），于是
+ * 矮视口压缩档里的 `.honest { margin: ... }` 根本管不到它们 ——
+ * 行内样式各自多占 10px / 8px 的间距，压缩档压不动它们。
+ *
+ * 已量测的是**压缩档本身生效**（.lab-agent/evidence/
+ * panel-height-measurements.md）：900×700 下 .honest 的
+ * font-size = 10px、padding = 5px 8px、.honest-2 的 margin-top = 5px，
+ * 面板 700/700 溢出 0。
+ * 至于"53px 的溢出量里有多少来自这两条"，**没有逐项量过**，
+ * 所以这里不再写成"实测"。
+ *
+ * 挪到 CSS 之后，压缩档才真的能把整套间距一起收紧。
+ * 视觉值与原行内样式**完全相同**（10px / 8px / .72），大屏观感不变。
+ */
+.honest-2 {
+  margin-top: 10px;
+}
+
+.honest-3 {
+  margin-top: 8px;
+  opacity: .72;
+}
+
+/* ---- 开始面板：三个入口（演示 / 拖入 / 钩子）---- */
+
+#startPanel .brand-en {
+  margin-top: -12px;
+  font-size: 10px;
+  letter-spacing: .34em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.entries {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0 6px;
+  width: 100%;
+  max-width: 440px;
+}
+
+.entry {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+}
+
+.entry-hint {
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  letter-spacing: .04em;
+  text-align: center;
+}
+
+/*
+ * 拖放区。
+ * 只在 dragover 时点亮 —— 平时是安静的虚线框，不抢「进入战场」的注意力。
+ */
+.drop,
+.hook {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 12px;
+  border: 1px dashed var(--line);
+  background: var(--panel);
+  transition: border-color .12s linear, background .12s linear;
+}
+
+.drop.over,
+.hook.over {
+  border-color: var(--cyan);
+  background: var(--panel-2);
+}
+
+.drop-title,
+.hook-title {
+  font-size: 12px;
+  color: var(--ink);
+  letter-spacing: .08em;
+}
+
+.drop-sub,
+.hook-sub {
+  font-size: 10.5px;
+  color: var(--ink-faint);
+}
+
+.drop-sub code,
+.hook-sub code {
+  color: var(--gold);
+  font-size: 10px;
+}
+
+/*
+ * 错误提示：默认不占位，出错才出现。
+ * 它必须是**红色且可读**的 —— 载入失败却画得像成功，就是伪造进度。
+ */
+.drop-err,
+.hook-state {
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--red);
+  text-align: center;
+  white-space: pre-line;
+}
+
+.drop-err:empty,
+.hook-state:empty {
+  display: none;
+}
+
+.hook-state.on {
+  color: var(--green);
+}
+
+.hook-row {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+}
+
+.hook-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+
+.ghost {
+  padding: 6px 14px;
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: .1em;
+  color: var(--ink-dim);
+  background: transparent;
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.ghost:hover {
+  color: var(--ink);
+  border-color: var(--cyan);
+}
+
+/* ---- 事件源状态条（诚实的出口：现在播的是哪份数据）---- */
+
+.note {
+  position: absolute;
+  left: 14px;
+  bottom: 12px;
+  max-width: min(560px, calc(100% - 28px));
+  padding: 6px 10px;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--ink-dim);
+  background: var(--toast-bg);
+  border-left: 2px solid var(--line);
+  white-space: pre-line;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .18s linear;
+}
+
+.note.on {
+  opacity: 1;
+}
+
+.note.bad {
+  color: #ffb3a8;
+  border-left-color: var(--red);
+}
+
+/* 一个敌人 = 一次工具调用。这句规则必须和分级表贴在一起看。 */
+.rule-note {
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--ink-faint);
+  text-align: left;
+}
+
+.rule-note code {
+  color: var(--gold);
+  font-size: 10px;
+}
+
+#startBtn {
+  margin-top: 6px;
+  padding: 9px 34px;
+  font-family: inherit;
+  font-size: 14px;
+  letter-spacing: .18em;
+  color: var(--bg);
+  background: var(--gold);
+  border: 0;
+  border-bottom: 3px solid var(--gold-shadow);
+  cursor: pointer;
+}
+
+#startBtn:hover {
+  background: var(--gold-hi);
+}
+
+#startBtn:active {
+  border-bottom-width: 1px;
+  transform: translateY(2px);
+}
+
+.keys {
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--ink-faint);
+  letter-spacing: .05em;
+}
+
+/*
+ * ===== 矮视口压缩 =====
+ *
+ * ===== 这些数字的来源与可信度（逐个标注，别把没验的写成量过）=====
+ *
+ * ⚠ 历史教训：这里曾经写着"真浏览器实测（DevTools 量 scrollHeight /
+ * clientHeight）"，而仓库里**没有任何测量产物**支持这句话 —— 当时那套
+ * 量测脚手架（.lab-agent/background-terminal/measure-server.*）连服务都
+ * 没起过，stderr 是 PowerShell 把 `&&` 当解析错误报出来的。所以现在只写
+ * 能追溯到证据的数字，并说清证据在哪个文件。
+ *
+ * 【2026-10-27 当前读数】Chrome headless，读 #startPanel scrollHeight / clientHeight：
+ *   1280×720、1280×768、800×600、900×700、1600×900 溢出都是 0。
+ *   钩子输入框在本机 http 页面上会被改成当前页面来源。
+ *
+ * 【更早的量测，压缩档改过之后不再代表当前面板】
+ * 证据：.lab-agent/evidence/panel-height-measurements.md
+ *
+ *   800×600   600 / 600  溢出 0
+ *   1600×900  900 / 900  溢出 0
+ *   1280×720  896 / 720  溢出 176px   ← 加 899px 档之前
+ *   900×700   700 / 700  溢出 0
+ *   1280×1000 1000 / 1000 溢出 0
+ *
+ * 【下面这些是历史记录，没有量测产物，别当成"已复核"】
+ *
+ *   800×600  未压缩     681 / 600  溢出约 81px，品牌名与主按钮被切
+ *   800×600  本档第一版 653 / 600  溢出约 53px（当时注释却写"压到 520
+ *                                  以内、完全不需要滚动"，没做到）
+ *   1600×900 未压缩     904 / 900  溢出约 4px（右下角一条细滚动条）
+ *
+ * 701–899px 由下面的 max-height: 899px 档压缩。
+ * 2026-10-27 Chrome headless 读数（scrollHeight / clientHeight，溢出 0）：
+ * 1280×720、1280×768、800×600、900×700、1600×900。
+ * 没逐个量过的高度不要外推。滚动条仍然留着，装不下时还能滚到两端。
+ *
+ * 只动间距、内边距、字号、行高；不动文案、不删内容：
+ * 三条诚实声明仍然全部在场（verify.mjs 有断言钉住这一点）。
+ * 大屏（≥900px 高度）完全不受影响 —— 这档的媒体查询不会触发。
+ */
+/*
+ * 701–899px（例如 1280×720）原先不触发 700px 档，面板会高出视口。
+ * 这一档只压间距和字号，不删诚实声明。≥900px 的窗口不进这一档。
+ */
+@media (max-height: 899px) {
+  #startPanel {
+    gap: 4px;
+    padding: 8px 16px;
+  }
+  #startPanel h1 { font-size: 22px; letter-spacing: .1em; }
+  #startPanel .brand-en { margin-top: -8px; font-size: 9px; }
+  #startPanel .sub { margin-top: -2px; font-size: 11px; }
+  .entries { margin: 4px 0 2px; gap: 4px; }
+  .entry { gap: 2px; }
+  .drop,
+  .hook { padding: 6px 8px; gap: 2px; }
+  .rules { gap: 2px; margin: 4px 0 2px; }
+  .rule { font-size: 11px; }
+  .honest {
+    font-size: 10px;
+    padding: 4px 8px;
+    line-height: 1.35;
+    margin-top: 2px;
+  }
+  .honest-2 { margin-top: 3px; }
+  .honest-3 { margin-top: 2px; }
+  #startBtn { margin-top: 0; padding: 6px 22px; }
+  .keys { margin-top: 0; }
+}
+
+@media (max-height: 700px) {
+  #startPanel {
+    gap: 5px;
+    padding: 10px;
+  }
+  #startPanel h1 { font-size: 22px; letter-spacing: .12em; }
+  #startPanel .brand-en { margin-top: -6px; }
+  #startPanel .sub { margin-top: -2px; font-size: 11px; }
+  .entries { margin: 5px 0 3px; gap: 5px; }
+  .entry { gap: 3px; }
+  .drop,
+  .hook { padding: 6px 10px; gap: 3px; }
+  .rules { gap: 3px; margin: 5px 0 2px; }
+  .rule { font-size: 11px; }
+  .tag { padding: 1px 6px; }
+  .rule-note { font-size: 10px; margin-top: 2px; }
+  .honest {
+    font-size: 10px;
+    padding: 5px 8px;
+    line-height: 1.45;
+    margin: 4px 0 3px;
+  }
+  /* 行内样式已挪进 CSS，这两条现在才真的能被这档压到 */
+  .honest-2 { margin-top: 5px; }
+  .honest-3 { margin-top: 4px; }
+  .hook-row input,
+  .hook-row .ghost { padding: 4px 8px; }
+  #startBtn { margin-top: 2px; padding: 7px 26px; }
+  .keys { font-size: 9.5px; margin-top: 1px; }
+}
+
+/* 极矮（横屏手机 / 600px 以下）：再压一档字号 */
+@media (max-height: 620px) {
+  #startPanel { gap: 5px; }
+  #startPanel h1 { font-size: 20px; }
+  .honest { font-size: 9.5px; padding: 5px 8px; line-height: 1.45; }
+  .rule { font-size: 10.5px; }
+  .entry-hint,
+  .drop-sub,
+  .hook-sub { font-size: 9.5px; }
+}
+
+/*
+ * ===== 键盘焦点 =====
+ *
+ * 之前全站没有一条 :focus-visible 规则（grep focus 命中 0 次），
+ * Tab 到「进入战场」只有浏览器默认的 1px 黑描边 —— 那在 --void-veil
+ * 的深色面板上几乎看不见，等于键盘用户没有焦点指示。
+ *
+ * 配色不新开体系：描边用 --cyan（与 hover 的强调色同源），
+ * 光晕用 --nebula-cyan（本来就存在的一层极淡青色）。
+ * outline-offset 让描边落在元素外侧，不会被按钮自己的底色吃掉。
+ */
+a[href]:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--nebula-cyan);
+}
+
+/*
+ * 金色主按钮：描边落在按钮**外侧**（outline-offset 把光晕挤出色块），
+ * 压在 --void-veil 深色面板上，所以青色仍然是最醒目的一档。
+ * 比通用规则多 1px，因为主按钮是这个页面上唯一的主行动点。
+ */
+#startBtn:focus-visible,
+.primary:focus-visible {
+  outline: 3px solid var(--cyan);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 6px var(--nebula-cyan);
+}
+
+/* 拖放/钩子区整体也可以被 Tab 到（tabindex="0"），焦点要同样清楚 */
+.drop:focus-visible,
+.hook:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+  border-color: var(--cyan);
+  background: var(--panel-2);
+}

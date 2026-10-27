@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wicm84266964/agent-live/protocol/event.v1.json",
+  "title": "agent-live event v1",
+  "description": "One agent event. Death is tool_end with ok true. This file is the published shape of protocol/events.mjs SCHEMA. If they disagree, the code is the source of truth and this file is a bug.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["kind", "ts"],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": ["tool", "tool_end", "turn_end"]
+    },
+    "tool": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Required for kind=tool. Optional for kind=tool_end."
+    },
+    "id": {
+      "type": ["string", "number"],
+      "description": "Pairing key. String and number forms of the same id are the same call."
+    },
+    "ts": {
+      "type": "number",
+      "description": "Event time in milliseconds. Required for every known kind."
+    },
+    "realMs": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Real duration of this call in milliseconds. Display only."
+    },
+    "ok": {
+      "type": "boolean",
+      "description": "Required for kind=tool_end. false is a failure, not a kill."
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "tool" } }, "required": ["kind"] },
+      "then": { "required": ["tool", "ts"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "tool_end" } }, "required": ["kind"] },
+      "then": { "required": ["ok", "ts"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "turn_end" } }, "required": ["kind"] },
+      "then": { "required": ["ts"] }
+    }
+  ]
+}
