@@ -1,0 +1,57 @@
+name: Bug report
+description: Report a reproducible agent-live problem
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use minimal synthetic events. Remove credentials, raw session transcripts, tool arguments, tool output, local paths, and personal information.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: "For example: v1.0.0 or abc1234"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Runtime environment
+      description: Include the operating system, Node.js version, browser and event source.
+      placeholder: "Windows 11, Node.js 22, Chrome, codex-session"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Provide the smallest reliable command sequence and a synthetic input.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs or artifact excerpt
+      description: Include only the minimum relevant output after removing private session content and credentials.
+      render: shell
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues for the same problem.
+          required: true
+        - label: I used synthetic or publishable events and removed credentials, raw session transcripts, local paths, and personal information.
+          required: true

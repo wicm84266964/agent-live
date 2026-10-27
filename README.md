@@ -434,3 +434,9 @@ __shield.restart() / pause() // 重播 / 暂停
 每一只敌人的出场和死亡时刻都是 `tool/call.time` 与 `tool/result.time` 相减得到的真值。
 
 零依赖。零构建步骤。MIT。
+
+## 参与与发布
+
+修改通过主题分支和 PR 合并，必需的 `test suite` CI 通过后才能进入 `main`。发布统一使用 GitHub Actions 的 **Create release**，复核版本、发布说明及目标提交 CI；公开版本标签禁止改写或删除。
+
+详见 [贡献指南](CONTRIBUTING.md)、[发布流程](docs/maintenance/release_workflow_zh.md) 和 [版本记录](CHANGELOG.md)。

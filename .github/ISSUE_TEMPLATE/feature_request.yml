@@ -1,0 +1,38 @@
+name: Feature request
+description: Propose a agent-live workflow improvement
+title: "[Feature]: "
+body:
+  - type: input
+    id: workflow
+    attributes:
+      label: Affected workflow
+      description: Which event source, visualization or installation workflow would this improve?
+      placeholder: "For example: session selection, live events or flight visualization"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Describe the current limitation without including private session content.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues for a similar request.
+          required: true
+        - label: This request contains no credentials, raw session transcripts, or personal information.
+          required: true
