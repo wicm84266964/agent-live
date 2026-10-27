@@ -1,6 +1,18 @@
 # Changelog
 
-## 0.1.0
+## Unreleased
+
+- Align repository governance: required pull-request CI, protected main and release tags, a gated release workflow, and issue/PR templates.
+
+## 0.0.1 — 2026-10-28
+
+- One-command local workspace, Codex session discovery, selection and incremental synchronization.
+- Responsive mission console, live call activity, pause buffering and SSE recovery.
+- Vertical flight combat, automatic evasion, hit effects, 1 HP health lock and kill healing.
+- Boss exchanges fire until real task settlement; presentation armor cannot cause a task kill.
+- Codex completion logs remain completion-only; in-progress combat requires lifecycle events.
+
+## Historical candidate (original label 0.1.0, never released)
 
 First public candidate.
 

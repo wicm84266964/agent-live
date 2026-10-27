@@ -1,0 +1,52 @@
+name: Create release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version tag matching package.json, for example v0.0.2
+        required: true
+        type: string
+      prerelease:
+        description: Mark this as a prerelease
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: create-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: create tagged release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate version, release notes, existing tags and exact commit CI
+        env:
+          VERSION: ${{ inputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          GH_TOKEN: ${{ github.token }}
+        run: node tools/release-gate.mjs
+      - name: Create immutable tag and GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          args=("$VERSION" --target "$GITHUB_SHA" --title "$VERSION" --notes-file "docs/releases/$VERSION.md")
+          if [[ "$PRERELEASE" == "true" ]]; then args+=(--prerelease); else args+=(--latest); fi
+          gh release create "${args[@]}"
